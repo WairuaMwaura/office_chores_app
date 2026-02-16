@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Office Chores - History</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Office Chore Manager</h1>
+        </header>
+        <nav>
+            <a href="/">Today's Chores</a>
+            <a href="/people">Manage People</a>
+            <a href="/history">History</a>
+        </nav>
+
+        <div id="message-container"></div>
+
+        <div class="card">
+            <h2>Chore History Summary</h2>
+            <p>This table shows a rolling count of chores to ensure fairness.</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Member Name</th>
+                        <th>Chores This Week</th>
+                        <th>Chores in Last 2 Weeks</th>
+                    </tr>
+                </thead>
+                <tbody id="history-table-body">
+                    <!-- History data will be loaded here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

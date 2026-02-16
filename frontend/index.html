@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Office Chores - Attendance</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Office Chore Manager</h1>
+        </header>
+        <nav>
+            <a href="/">Today's Chores</a>
+            <a href="/people">Manage People</a>
+            <a href="/history">History</a>
+        </nav>
+
+        <div id="message-container"></div>
+
+        <div class="card">
+            <h2>Today's Attendance</h2>
+            <p>Select who is present in the office today.</p>
+            <ul id="attendance-list" class="checklist">
+                <!-- Member list will be loaded here by JavaScript -->
+                <li>Loading members...</li>
+            </ul>
+            <div class="button-container">
+                <button id="assign-chores-btn">Mark Attendance & Assign Chores</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Assigned Chores for Today</h2>
+            <div id="assignments-display" class="assignments-display">
+                <div class="assignment-group">
+                    <h3>🍳 Cooking</h3>
+                    <p id="cooks-list">Not assigned yet</p>
+                </div>
+                <div class="assignment-group">
+                    <h3>💧 Washing Dishes</h3>
+                    <p id="dishes-list">Not assigned yet</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

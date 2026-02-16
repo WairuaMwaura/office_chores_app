@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Office Chores - Manage People</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Office Chore Manager</h1>
+        </header>
+        <nav>
+            <a href="/">Today's Chores</a>
+            <a href="/people">Manage People</a>
+            <a href="/history">History</a>
+        </nav>
+
+        <div id="message-container"></div>
+
+        <div class="card">
+            <h2>Add New Member</h2>
+            <form id="add-member-form">
+                <div class="form-group">
+                    <input type="text" id="new-member-name" placeholder="Enter new member's name" required>
+                    <button type="submit">Add Member</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>Current Members</h2>
+            <ul id="member-list" class="checklist">
+                <!-- Member list will be loaded here -->
+                <li>Loading members...</li>
+            </ul>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
