@@ -7,7 +7,7 @@ from mysql.connector import errorcode
 # Please update these values with your local MySQL credentials.
 db_config = {
     "host": os.environ.get("MYSQLHOST", "localhost"),
-    "port": int(os.environ.get("MYSQLPORT" or 3306)),
+    "port": int(os.environ.get("MYSQLPORT") or 3306),
     "user": os.environ.get("MYSQLUSER", "root"),
     "password": os.environ.get("MYSQLPASSWORD", ""),
     "database": os.environ.get("MYSQLDATABASE", "office-chores"),
