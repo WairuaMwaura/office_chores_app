@@ -1,13 +1,16 @@
+import os
+
 import mysql.connector
 from mysql.connector import errorcode
 
 # --- IMPORTANT: DATABASE CONFIGURATION ---
 # Please update these values with your local MySQL credentials.
 db_config = {
-    "host": "localhost",
-    "user": "root",  # <-- CHANGE THIS to your MySQL username
-    "password": "",  # <-- CHANGE THIS to your MySQL password
-    "database": "office_chores"
+    "host": os.environ.get("MYSQLHOST", "localhost"),
+    "port": int(os.environ.get("MYSQLPORT", 3306)),
+    "user": os.environ.get("MYSQLUSER", "root"),
+    "password": os.environ.get("MYSQLPASSWORD", ""),
+    "database": os.environ.get("MYSQLDATABASE", "office-chores"),
 }
 
 
@@ -16,6 +19,7 @@ def get_db_connection():
     try:
         conn = mysql.connector.connect(
             host=db_config["host"],
+            port=db_config["port"],
             user=db_config["user"],
             password=db_config["password"],
             database=db_config["database"]
