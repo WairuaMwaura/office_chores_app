@@ -48,7 +48,7 @@ def setup_database_and_tables():
         )
         cursor = conn.cursor()
         cursor.execute(
-            f"CREATE DATABASE IF NOT EXISTS {db_config['database']} CHARACTER SET utf8mb4")
+            f"CREATE DATABASE IF NOT EXISTS `{db_config['database']}` CHARACTER SET utf8mb4")
         print(f"Database '{db_config['database']}' created or already exists.")
         cursor.close()
         conn.close()
