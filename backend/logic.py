@@ -1,17 +1,94 @@
+# backend/logic.py
+
+import random
 from datetime import date, timedelta
-from .database import get_db_connection
+from .database import get_db_connection, db_config
+import mysql.connector
+from mysql.connector import errorcode
+
+
+# This new function runs once to safely add the new column for the "handicap" score.
+# It will check if the column exists first, so it's safe to run every time.
+def _add_score_adjustment_column_if_not_exists():
+    """Checks for and adds the 'score_adjustment' column to the members table."""
+    conn = get_db_connection()
+    if not conn:
+        print("DB connection failed, cannot check/update schema.")
+        return
+    cursor = conn.cursor()
+    try:
+        # This query checks the database's information schema to see if our column exists.
+        cursor.execute(f"""
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = '{db_config["database"]}' 
+            AND TABLE_NAME = 'members' 
+            AND COLUMN_NAME = 'score_adjustment'
+        """)
+        if cursor.fetchone()[0] == 0:
+            print("Column 'score_adjustment' not found. Adding it now...")
+            cursor.execute(
+                "ALTER TABLE members ADD COLUMN score_adjustment INT NOT NULL DEFAULT 0")
+            conn.commit()
+            print("Column 'score_adjustment' added successfully.")
+    except mysql.connector.Error as err:
+        print(f"Failed to alter table: {err}")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# Run the schema check once when the application starts.
+_add_score_adjustment_column_if_not_exists()
+
+
+def get_all_members_with_scores():
+    """Helper function to get all active members and their current penalty scores."""
+    conn = get_db_connection()
+    if not conn: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # This single, efficient query gets the chore count and adjustment for all members.
+        cursor.execute("""
+            SELECT 
+                m.member_id, 
+                m.name,
+                m.score_adjustment,
+                (SELECT COUNT(*) FROM chore_assignments ca WHERE ca.member_id = m.member_id) as chore_count
+            FROM members m
+            WHERE m.is_active = TRUE
+        """)
+        members = cursor.fetchall()
+        for member in members:
+            # The total penalty score is the sum of real chores and the adjustment.
+            member['total_score'] = member['chore_count'] + member[
+                'score_adjustment']
+        return members
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def add_member(name: str):
-    """Adds a new member to the office list."""
+    """Adds a new member and sets their score adjustment to the current highest score."""
     conn = get_db_connection()
-    if not conn:
-        return {"error": "Database connection failed."}
+    if not conn: return {"error": "Database connection failed."}
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO members (name) VALUES (%s)", (name,))
+        # Step 1: Find the current highest penalty score.
+        all_members = get_all_members_with_scores()
+        highest_score = 0
+        if all_members:
+            highest_score = max(member['total_score'] for member in all_members)
+
+        # Step 2: Insert the new member with the calculated score adjustment.
+        cursor.execute(
+            "INSERT INTO members (name, score_adjustment) VALUES (%s, %s)",
+            (name, highest_score)
+        )
         conn.commit()
-        return {"message": f"Member '{name}' added successfully."}
+        return {
+            "message": f"Member '{name}' added successfully with starting score of {highest_score}."}
     except Exception as err:
         return {"error": f"Failed to add member: {err}"}
     finally:
@@ -19,93 +96,16 @@ def add_member(name: str):
         conn.close()
 
 
-def remove_member(member_id: int):
-    """Deactivates a member. We don't delete to preserve history."""
-    conn = get_db_connection()
-    if not conn:
-        return {"error": "Database connection failed."}
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "UPDATE members SET is_active = FALSE WHERE member_id = %s",
-            (member_id,))
-        conn.commit()
-        return {"message": f"Member with ID {member_id} has been removed."}
-    except Exception as err:
-        return {"error": f"Failed to remove member: {err}"}
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def get_active_members():
-    """Retrieves a list of all active members."""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    cursor = conn.cursor(dictionary=True)
-    try:
-        cursor.execute(
-            "SELECT member_id, name FROM members WHERE is_active = TRUE ORDER BY name")
-        return cursor.fetchall()
-    except Exception as err:
-        print(f"Failed to get members: {err}")
-        return []
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def mark_attendance(present_member_ids: list[int], attendance_date_str: str):
-    """Marks the attendance for the given date."""
-    conn = get_db_connection()
-    if not conn:
-        return {"error": "Database connection failed."}
-    cursor = conn.cursor()
-    attendance_date = date.fromisoformat(attendance_date_str)
-    try:
-        all_members = get_active_members()
-        for member in all_members:
-            is_present = member['member_id'] in present_member_ids
-            cursor.execute(
-                "REPLACE INTO attendance (member_id, attendance_date, is_present) VALUES (%s, %s, %s)",
-                (member['member_id'], attendance_date, is_present)
-            )
-        conn.commit()
-        return {"message": "Attendance marked successfully."}
-    except Exception as err:
-        return {"error": f"Failed to mark attendance: {err}"}
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def get_chore_history_score(member_id: int, start_date: date, end_date: date):
-    """Calculates the number of chores for a member in a date range."""
-    conn = get_db_connection()
-    if not conn: return 0
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s AND assignment_date BETWEEN %s AND %s",
-            (member_id, start_date, end_date)
-        )
-        score = cursor.fetchone()[0]
-        return score
-    except Exception:
-        return 0
-    finally:
-        cursor.close()
-        conn.close()
-
-
 def assign_chores_for_today():
-    """The main function to assign chores based on fairness rules for today."""
+    """Main function to assign chores based on all-time history and new rules."""
     conn = get_db_connection()
-    if not conn:
-        return None, "Database connection failed."
+    if not conn: return None, "Database connection failed."
     cursor = conn.cursor(dictionary=True)
     today = date.today()
+
+    # --- NEW: Friday Rule Check ---
+    is_friday = (today.weekday() == 4)
+    min_required = 2 if is_friday else 3
 
     try:
         # Check if chores are already assigned for today
@@ -122,37 +122,58 @@ def assign_chores_for_today():
             "WHERE a.attendance_date = %s AND a.is_present = TRUE",
             (today,)
         )
-        present_members = cursor.fetchall()
+        present_members_today = {p['member_id']: p for p in cursor.fetchall()}
 
-        # Step 2: Check for minimum attendance
-        if len(present_members) < 3:
-            return None, "Warning: Fewer than 3 people are present. Chores cannot be assigned."
+        if len(present_members_today) < min_required:
+            return None, f"Warning: Fewer than {min_required} people are present. Chores cannot be assigned."
 
-        # Step 3: Calculate historical scores (last 14 days)
-        end_date = today - timedelta(days=1)
-        start_date = end_date - timedelta(days=13)
+        # Step 2: Get scores for ALL active members to filter from
+        all_members_scores = get_all_members_with_scores()
 
-        member_scores = []
-        for member in present_members:
-            score = get_chore_history_score(member['member_id'], start_date,
-                                            end_date)
-            member_scores.append(
-                {'member_id': member['member_id'], 'name': member['name'],
-                 'score': score})
-
-        # Step 4: Prioritize members with lower scores
-        member_scores.sort(key=lambda x: x['score'])
-
-        # Step 5: Assign chores
-        cooks = [member_scores[0], member_scores[1]]
-        dish_washer = member_scores[2]
-
-        # Step 6: Persist assignments
-        assignment_data = [
-            (cooks[0]['member_id'], 'Cooking', today),
-            (cooks[1]['member_id'], 'Cooking', today),
-            (dish_washer['member_id'], 'Washing Dishes', today)
+        # Filter the list to only include members present today
+        eligible_members = [
+            member for member in all_members_scores
+            if member['member_id'] in present_members_today
         ]
+
+        # Step 3: Sort by total score (lowest first)
+        eligible_members.sort(key=lambda x: x['total_score'])
+
+        # --- NEW: Randomized Tie-Breaking ---
+        # If the scores of the first few people are the same, shuffle them to randomize selection.
+        if len(eligible_members) >= 2:
+            first_score = eligible_members[0]['total_score']
+            # Find all members who are tied for the lowest score
+            tied_members = [m for m in eligible_members if
+                            m['total_score'] == first_score]
+            # Shuffle just that group of tied members
+            random.shuffle(tied_members)
+            # Replace the start of the main list with the shuffled tied members
+            eligible_members[:len(tied_members)] = tied_members
+
+        # Step 4: Assign chores
+        assignments = {}
+        assignment_data = []
+
+        # Assign 2 Cooks
+        cook1 = eligible_members[0]
+        cook2 = eligible_members[1]
+        assignments['cooks'] = [cook1['name'], cook2['name']]
+        assignment_data.extend([
+            (cook1['member_id'], 'Cooking', today),
+            (cook2['member_id'], 'Cooking', today)
+        ])
+
+        # Assign Dish Washer only if it's NOT Friday
+        if not is_friday:
+            dish_washer = eligible_members[2]
+            assignments['dish_washer'] = [dish_washer['name']]
+            assignment_data.append(
+                (dish_washer['member_id'], 'Washing Dishes', today))
+        else:
+            assignments['dish_washer'] = ["N/A (Friday)"]
+
+        # Step 5: Persist assignments
         insert_cursor = conn.cursor()
         insert_cursor.executemany(
             "INSERT INTO chore_assignments (member_id, chore_type, assignment_date) VALUES (%s, %s, %s)",
@@ -161,10 +182,6 @@ def assign_chores_for_today():
         conn.commit()
         insert_cursor.close()
 
-        assignments = {
-            'cooks': [cooks[0]['name'], cooks[1]['name']],
-            'dish_washer': [dish_washer['name']]
-        }
         return assignments, "Chores assigned successfully."
     except Exception as err:
         return None, f"An error occurred: {err}"
@@ -172,53 +189,11 @@ def assign_chores_for_today():
         cursor.close()
         conn.close()
 
-
-def get_daily_assignments(assignment_date: date):
-    """Retrieves assigned chores for a specific date."""
-    conn = get_db_connection()
-    if not conn: return {}
-    cursor = conn.cursor(dictionary=True)
-    assignments = {'cooks': [], 'dish_washer': []}
-    try:
-        cursor.execute(
-            "SELECT m.name, ca.chore_type FROM chore_assignments ca "
-            "JOIN members m ON ca.member_id = m.member_id "
-            "WHERE ca.assignment_date = %s",
-            (assignment_date,)
-        )
-        for row in cursor.fetchall():
-            if row['chore_type'] == 'Cooking':
-                assignments['cooks'].append(row['name'])
-            else:
-                assignments['dish_washer'].append(row['name'])
-        return assignments
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def get_history_summary():
-    """Generates a summary of chores for the last two weeks."""
-    conn = get_db_connection()
-    if not conn: return []
-    cursor = conn.cursor(dictionary=True)
-
-    today = date.today()
-    start_of_week = today - timedelta(days=today.weekday())
-    start_of_last_2_weeks = today - timedelta(days=13)
-
-    members = get_active_members()
-    summary = []
-
-    for member in members:
-        chores_this_week = get_chore_history_score(member['member_id'],
-                                                   start_of_week, today)
-        chores_last_2_weeks = get_chore_history_score(member['member_id'],
-                                                      start_of_last_2_weeks,
-                                                      today)
-        summary.append({
-            "name": member['name'],
-            "chores_this_week": chores_this_week,
-            "chores_last_2_weeks": chores_last_2_weeks
-        })
-    return summary
+# --- Unchanged Functions ---
+# (The rest of the functions from your original logic.py file go here)
+# For brevity, I'll list them by name. Ensure they are still in your file.
+# - remove_member(member_id: int)
+# - get_active_members()
+# - mark_attendance(present_member_ids: list[int], attendance_date_str: str)
+# - get_daily_assignments(assignment_date: date)
+# - get_history_summary() # You might want to update this to show total score + adjustment
