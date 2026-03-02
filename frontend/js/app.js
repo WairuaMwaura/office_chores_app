@@ -33,7 +33,6 @@ function showMessage(type, text) {
 async function initIndexPage() {
     const attendanceList = document.getElementById('attendance-list');
     const assignButton = document.getElementById('assign-chores-btn');
-    const assignmentsCard = document.getElementById('assignments-card');
     const lateArrivalCard = document.getElementById('late-arrival-card');
 
     async function loadMembers() {
@@ -60,13 +59,18 @@ async function initIndexPage() {
         }
     }
 
-    async function showAssignments(cooks, dishWasher) {
-        document.getElementById('cooks-list').textContent = cooks.join(', ') || 'N/A';
-        // dish_washer can be array of strings OR array of objects (after late arrival update)
+    function updateAssignmentsDisplay(cooks, dishWasher) {
+        // dish_washer items can be strings or objects {name, assignment_id, member_id}
+        const cookNames = cooks.map(c => typeof c === 'object' ? c.name : c);
         const dishNames = dishWasher.map(d => typeof d === 'object' ? d.name : d);
+        document.getElementById('cooks-list').textContent = cookNames.join(', ') || 'N/A';
         document.getElementById('dishes-list').textContent = dishNames.join(', ') || 'N/A';
-        assignmentsCard.style.display = 'block';
-        assignButton.disabled = true;
+    }
+
+    async function refreshAssignmentsAndLateArrival() {
+        const assignRes = await fetch(`${API_URL}/api/chores/today`);
+        const assignments = await assignRes.json();
+        updateAssignmentsDisplay(assignments.cooks || [], assignments.dish_washer || []);
         await loadLateArrivalSection();
     }
 
@@ -77,7 +81,9 @@ async function initIndexPage() {
             const cooks = assignments.cooks || [];
             const dishWasher = assignments.dish_washer || [];
             if (cooks.length > 0 || dishWasher.length > 0) {
-                await showAssignments(cooks, dishWasher);
+                updateAssignmentsDisplay(cooks, dishWasher);
+                assignButton.disabled = true;
+                await loadLateArrivalSection();
             }
         } catch (error) {
             console.error('Could not fetch today\'s assignments:', error);
@@ -106,8 +112,10 @@ async function initIndexPage() {
                 showMessage('warning', result.message || 'An error occurred.');
             } else {
                 const { assignments, message } = result;
-                await showAssignments(assignments.cooks, assignments.dish_washer);
+                updateAssignmentsDisplay(assignments.cooks, assignments.dish_washer);
+                assignButton.disabled = true;
                 showMessage('success', message);
+                await loadLateArrivalSection();
             }
         } catch (error) {
             showMessage('error', 'An unexpected error occurred during assignment.');
@@ -134,8 +142,9 @@ async function initIndexPage() {
                 select.appendChild(option);
             });
 
-            lateArrivalCard.style.display = 'block';
+            // Reset options panel
             document.getElementById('late-arrival-options').style.display = 'none';
+            lateArrivalCard.style.display = 'block';
         } catch (err) {
             console.error('Failed to load absent members:', err);
         }
@@ -160,32 +169,32 @@ async function initIndexPage() {
             actionsDiv.innerHTML = '';
             optionsDiv.style.display = 'block';
 
-            // Case 1: Chores not yet assigned — just mark attendance
+            // Case 1: No chores assigned yet
             if (!status.chores_assigned) {
-                contextP.textContent = `Chores haven't been assigned yet. ${memberName} will be included in the next assignment.`;
-                addActionButton(actionsDiv, 'Note Attendance Only', 'secondary', async () => {
+                contextP.textContent = `Chores haven't been assigned yet. ${memberName} will be included when chores are assigned.`;
+                addActionButton(actionsDiv, 'Note Attendance Only', '', async () => {
                     await submitLateArrival(memberId, 'attendance_only');
                 });
                 return;
             }
 
-            // Case 2: Friday — no dish washer slot, just note attendance
+            // Case 2: Friday — no dish washer slot
             if (status.is_friday) {
-                contextP.textContent = `It's Friday — no dish washer slot. ${memberName} can only be noted as present.`;
-                addActionButton(actionsDiv, 'Note Attendance Only', 'secondary', async () => {
+                contextP.textContent = `It's Friday — no dish washer slot today. ${memberName} can only be noted as present.`;
+                addActionButton(actionsDiv, 'Note Attendance Only', '', async () => {
                     await submitLateArrival(memberId, 'attendance_only');
                 });
                 return;
             }
 
-            // Case 3: Open slots (understaffed)
+            // Case 3: Open chore slots (understaffed)
             if (!status.fully_staffed) {
                 const missing = !status.cooks_filled ? 'Cook' : 'Dish Washer';
-                contextP.textContent = `There's an open ${missing} slot. ${memberName} can fill it.`;
-                addActionButton(actionsDiv, `Assign as ${missing}`, 'primary', async () => {
+                contextP.textContent = `There's an open ${missing} slot. ${memberName} can fill it or just be noted as present.`;
+                addActionButton(actionsDiv, `Assign as ${missing}`, '', async () => {
                     await submitLateArrival(memberId, 'fill_gap');
                 });
-                addActionButton(actionsDiv, 'Just Note Attendance', 'secondary', async () => {
+                addActionButton(actionsDiv, 'Just Note Attendance', 'secondary-btn', async () => {
                     await submitLateArrival(memberId, 'attendance_only');
                 });
                 return;
@@ -196,15 +205,15 @@ async function initIndexPage() {
             if (dishWashers.length > 0) {
                 const dw = dishWashers[0];
                 contextP.textContent = `All chores are assigned. ${memberName} can take over dish washing from ${dw.name}, or just be noted as present.`;
-                addActionButton(actionsDiv, `Swap: ${memberName} does dishes instead of ${dw.name}`, 'warning', async () => {
+                addActionButton(actionsDiv, `${memberName} does dishes (swap with ${dw.name})`, '', async () => {
                     await submitLateArrival(memberId, 'swap_dishes', dw.assignment_id);
                 });
-                addActionButton(actionsDiv, 'Just Note Attendance', 'secondary', async () => {
+                addActionButton(actionsDiv, 'Just Note Attendance', 'secondary-btn', async () => {
                     await submitLateArrival(memberId, 'attendance_only');
                 });
             } else {
-                contextP.textContent = `All chores are assigned and no dish washer to swap. ${memberName} will just be noted as present.`;
-                addActionButton(actionsDiv, 'Note Attendance Only', 'secondary', async () => {
+                contextP.textContent = `All chores are assigned. ${memberName} will just be noted as present.`;
+                addActionButton(actionsDiv, 'Note Attendance Only', '', async () => {
                     await submitLateArrival(memberId, 'attendance_only');
                 });
             }
@@ -214,12 +223,10 @@ async function initIndexPage() {
         }
     });
 
-    function addActionButton(container, label, style, onClick) {
+    function addActionButton(container, label, extraClass, onClick) {
         const btn = document.createElement('button');
         btn.textContent = label;
-        btn.className = style;
-        btn.style.marginRight = '8px';
-        btn.style.marginTop = '8px';
+        if (extraClass) btn.classList.add(extraClass);
         btn.addEventListener('click', onClick);
         container.appendChild(btn);
     }
@@ -240,10 +247,7 @@ async function initIndexPage() {
                 showMessage('error', result.error || 'Failed to process late arrival.');
             } else {
                 showMessage('success', result.message);
-                // Refresh assignments display and late arrival section
-                const assignRes = await fetch(`${API_URL}/api/chores/today`);
-                const assignments = await assignRes.json();
-                await showAssignments(assignments.cooks || [], assignments.dish_washer || []);
+                await refreshAssignmentsAndLateArrival();
             }
         } catch (err) {
             showMessage('error', 'An unexpected error occurred.');

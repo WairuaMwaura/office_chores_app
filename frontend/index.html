@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Office Chores - Today</title>
+    <title>Office Chores - Attendance</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -18,35 +18,46 @@
         </nav>
         <div id="message-container"></div>
 
-        <!-- Attendance + Assign -->
-        <div class="card" id="attendance-card">
-            <h2>Mark Attendance & Assign Chores</h2>
-            <ul id="attendance-list"></ul>
-            <button id="assign-chores-btn">Mark Attendance & Assign Chores</button>
+        <!-- Attendance Card -->
+        <div class="card">
+            <h2>Today's Attendance</h2>
+            <p>Select who is present in the office today.</p>
+            <ul id="attendance-list" class="checklist">
+                <li>Loading members...</li>
+            </ul>
+            <div class="button-container">
+                <button id="assign-chores-btn">Mark Attendance & Assign Chores</button>
+            </div>
         </div>
 
-        <!-- Today's Assignments -->
-        <div class="card" id="assignments-card" style="display:none;">
-            <h2>Today's Assignments</h2>
-            <p><strong>Cooks:</strong> <span id="cooks-list">—</span></p>
-            <p><strong>Dish Washer:</strong> <span id="dishes-list">—</span></p>
+        <!-- Assignments Card -->
+        <div class="card">
+            <h2>Assigned Chores for Today</h2>
+            <div id="assignments-display" class="assignments-display">
+                <div class="assignment-group">
+                    <h3>🍳 Cooking</h3>
+                    <p id="cooks-list">Not assigned yet</p>
+                </div>
+                <div class="assignment-group">
+                    <h3>💧 Washing Dishes</h3>
+                    <p id="dishes-list">Not assigned yet</p>
+                </div>
+            </div>
         </div>
 
-        <!-- Late Arrival Section (shown after chores assigned) -->
+        <!-- Late Arrival Card (shown only after chores are assigned) -->
         <div class="card" id="late-arrival-card" style="display:none;">
             <h2>Mark Late Arrival</h2>
             <p>Someone arrived after chores were assigned? Record them here.</p>
-            <div id="late-arrival-form">
-                <select id="late-member-select">
+            <div class="form-group">
+                <select id="late-member-select" style="flex-grow:1; padding:0.75rem; font-size:1rem; border:1px solid var(--border-color); border-radius:5px;">
                     <option value="">— Select member —</option>
                 </select>
                 <button id="check-late-btn">Check Options</button>
             </div>
-
-            <!-- Options shown after checking -->
             <div id="late-arrival-options" style="display:none;">
-                <p id="late-arrival-context"></p>
-                <div id="late-arrival-actions"></div>
+                <p id="late-arrival-context" style="color: var(--secondary-color); margin-bottom: 1rem;"></p>
+                <div id="late-arrival-actions" class="button-container" style="text-align:left; display:flex; flex-wrap:wrap; gap:0.75rem;"></div>
             </div>
         </div>
     </div>
