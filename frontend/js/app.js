@@ -201,22 +201,21 @@ async function initPeoplePage() {
 // --- History Page Logic ---
 async function initHistoryPage() {
     const historyTableBody = document.getElementById('history-table-body');
-
     try {
         const response = await fetch(`${API_URL}/api/history/summary`);
         const summary = await response.json();
-
         if (summary.length === 0) {
-            historyTableBody.innerHTML = '<tr><td colspan="3">No history data available. Add members and assign chores.</td></tr>';
+            historyTableBody.innerHTML = '<tr><td colspan="5">No history data available.</td></tr>';
             return;
         }
-
         summary.forEach(item => {
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>${item.name}</td>
                 <td>${item.chores_this_week}</td>
-                <td>${item.chores_last_2_weeks}</td>
+                <td>${item.total_chores}</td>
+                <td>${item.days_present}</td>
+                <td>${item.chore_rate}</td>
             `;
             historyTableBody.appendChild(row);
         });
