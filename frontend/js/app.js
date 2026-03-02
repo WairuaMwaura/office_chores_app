@@ -1,6 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
     const path = window.location.pathname;
-
     if (path === '/' || path === '/index.html') {
         initIndexPage();
     } else if (path === '/people' || path === '/people.html') {
@@ -8,7 +7,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (path === '/history' || path === '/history.html') {
         initHistoryPage();
     }
-
     setActiveNav();
 });
 
@@ -16,7 +14,6 @@ function setActiveNav() {
     const path = window.location.pathname;
     const navLinks = document.querySelectorAll('nav a');
     navLinks.forEach(link => {
-        // Normalize href to match pathname for comparison
         const linkPath = new URL(link.href).pathname;
         if (linkPath === path || (path === '/' && linkPath === '/index.html')) {
             link.classList.add('active');
@@ -36,12 +33,14 @@ function showMessage(type, text) {
 async function initIndexPage() {
     const attendanceList = document.getElementById('attendance-list');
     const assignButton = document.getElementById('assign-chores-btn');
+    const assignmentsCard = document.getElementById('assignments-card');
+    const lateArrivalCard = document.getElementById('late-arrival-card');
 
     async function loadMembers() {
         try {
             const response = await fetch(`${API_URL}/api/members`);
             const members = await response.json();
-            attendanceList.innerHTML = ''; // Clear previous list
+            attendanceList.innerHTML = '';
             if (members.length === 0) {
                 attendanceList.innerHTML = '<li>Please add members on the "Manage People" page first.</li>';
                 assignButton.disabled = true;
@@ -61,18 +60,24 @@ async function initIndexPage() {
         }
     }
 
+    async function showAssignments(cooks, dishWasher) {
+        document.getElementById('cooks-list').textContent = cooks.join(', ') || 'N/A';
+        // dish_washer can be array of strings OR array of objects (after late arrival update)
+        const dishNames = dishWasher.map(d => typeof d === 'object' ? d.name : d);
+        document.getElementById('dishes-list').textContent = dishNames.join(', ') || 'N/A';
+        assignmentsCard.style.display = 'block';
+        assignButton.disabled = true;
+        await loadLateArrivalSection();
+    }
+
     async function loadTodaysAssignments() {
         try {
             const response = await fetch(`${API_URL}/api/chores/today`);
             const assignments = await response.json();
             const cooks = assignments.cooks || [];
             const dishWasher = assignments.dish_washer || [];
-
             if (cooks.length > 0 || dishWasher.length > 0) {
-                document.getElementById('cooks-list').textContent = cooks.join(', ') || 'N/A';
-                document.getElementById('dishes-list').textContent = dishWasher.join(', ') || 'N/A';
-                showMessage('success', 'Chores for today have already been assigned.');
-                assignButton.disabled = true; // Disable if already assigned
+                await showAssignments(cooks, dishWasher);
             }
         } catch (error) {
             console.error('Could not fetch today\'s assignments:', error);
@@ -83,7 +88,6 @@ async function initIndexPage() {
         const checkedBoxes = document.querySelectorAll('#attendance-list input[type="checkbox"]:checked');
         const present_ids = Array.from(checkedBoxes).map(cb => parseInt(cb.value));
 
-        // Step 1: Mark attendance
         try {
             await fetch(`${API_URL}/api/attendance`, {
                 method: 'POST',
@@ -95,24 +99,156 @@ async function initIndexPage() {
             return;
         }
 
-        // Step 2: Try to assign chores
         try {
             const response = await fetch(`${API_URL}/api/chores/assign`, { method: 'POST' });
             const result = await response.json();
-
             if (!response.ok) {
                 showMessage('warning', result.message || 'An error occurred.');
             } else {
                 const { assignments, message } = result;
-                document.getElementById('cooks-list').textContent = assignments.cooks.join(', ');
-                document.getElementById('dishes-list').textContent = assignments.dish_washer.join(', ');
+                await showAssignments(assignments.cooks, assignments.dish_washer);
                 showMessage('success', message);
-                assignButton.disabled = true; // Disable after successful assignment
             }
         } catch (error) {
             showMessage('error', 'An unexpected error occurred during assignment.');
         }
     });
+
+    // --- Late Arrival ---
+    async function loadLateArrivalSection() {
+        try {
+            const response = await fetch(`${API_URL}/api/attendance/absent-today`);
+            const absentMembers = await response.json();
+            const select = document.getElementById('late-member-select');
+            select.innerHTML = '<option value="">— Select member —</option>';
+
+            if (absentMembers.length === 0) {
+                lateArrivalCard.style.display = 'none';
+                return;
+            }
+
+            absentMembers.forEach(member => {
+                const option = document.createElement('option');
+                option.value = member.member_id;
+                option.textContent = member.name;
+                select.appendChild(option);
+            });
+
+            lateArrivalCard.style.display = 'block';
+            document.getElementById('late-arrival-options').style.display = 'none';
+        } catch (err) {
+            console.error('Failed to load absent members:', err);
+        }
+    }
+
+    document.getElementById('check-late-btn').addEventListener('click', async () => {
+        const select = document.getElementById('late-member-select');
+        const memberId = parseInt(select.value);
+        if (!memberId) {
+            showMessage('error', 'Please select a member first.');
+            return;
+        }
+
+        try {
+            const statusRes = await fetch(`${API_URL}/api/chores/status`);
+            const status = await statusRes.json();
+            const memberName = select.options[select.selectedIndex].text;
+
+            const optionsDiv = document.getElementById('late-arrival-options');
+            const contextP = document.getElementById('late-arrival-context');
+            const actionsDiv = document.getElementById('late-arrival-actions');
+            actionsDiv.innerHTML = '';
+            optionsDiv.style.display = 'block';
+
+            // Case 1: Chores not yet assigned — just mark attendance
+            if (!status.chores_assigned) {
+                contextP.textContent = `Chores haven't been assigned yet. ${memberName} will be included in the next assignment.`;
+                addActionButton(actionsDiv, 'Note Attendance Only', 'secondary', async () => {
+                    await submitLateArrival(memberId, 'attendance_only');
+                });
+                return;
+            }
+
+            // Case 2: Friday — no dish washer slot, just note attendance
+            if (status.is_friday) {
+                contextP.textContent = `It's Friday — no dish washer slot. ${memberName} can only be noted as present.`;
+                addActionButton(actionsDiv, 'Note Attendance Only', 'secondary', async () => {
+                    await submitLateArrival(memberId, 'attendance_only');
+                });
+                return;
+            }
+
+            // Case 3: Open slots (understaffed)
+            if (!status.fully_staffed) {
+                const missing = !status.cooks_filled ? 'Cook' : 'Dish Washer';
+                contextP.textContent = `There's an open ${missing} slot. ${memberName} can fill it.`;
+                addActionButton(actionsDiv, `Assign as ${missing}`, 'primary', async () => {
+                    await submitLateArrival(memberId, 'fill_gap');
+                });
+                addActionButton(actionsDiv, 'Just Note Attendance', 'secondary', async () => {
+                    await submitLateArrival(memberId, 'attendance_only');
+                });
+                return;
+            }
+
+            // Case 4: Fully staffed — offer swap or attendance only
+            const dishWashers = status.dish_washers || [];
+            if (dishWashers.length > 0) {
+                const dw = dishWashers[0];
+                contextP.textContent = `All chores are assigned. ${memberName} can take over dish washing from ${dw.name}, or just be noted as present.`;
+                addActionButton(actionsDiv, `Swap: ${memberName} does dishes instead of ${dw.name}`, 'warning', async () => {
+                    await submitLateArrival(memberId, 'swap_dishes', dw.assignment_id);
+                });
+                addActionButton(actionsDiv, 'Just Note Attendance', 'secondary', async () => {
+                    await submitLateArrival(memberId, 'attendance_only');
+                });
+            } else {
+                contextP.textContent = `All chores are assigned and no dish washer to swap. ${memberName} will just be noted as present.`;
+                addActionButton(actionsDiv, 'Note Attendance Only', 'secondary', async () => {
+                    await submitLateArrival(memberId, 'attendance_only');
+                });
+            }
+
+        } catch (err) {
+            showMessage('error', 'Failed to check chore status.');
+        }
+    });
+
+    function addActionButton(container, label, style, onClick) {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.className = style;
+        btn.style.marginRight = '8px';
+        btn.style.marginTop = '8px';
+        btn.addEventListener('click', onClick);
+        container.appendChild(btn);
+    }
+
+    async function submitLateArrival(memberId, action, swapAssignmentId = null) {
+        try {
+            const payload = { member_id: memberId, action };
+            if (swapAssignmentId) payload.swap_assignment_id = swapAssignmentId;
+
+            const response = await fetch(`${API_URL}/api/attendance/late-arrival`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+
+            if (!response.ok) {
+                showMessage('error', result.error || 'Failed to process late arrival.');
+            } else {
+                showMessage('success', result.message);
+                // Refresh assignments display and late arrival section
+                const assignRes = await fetch(`${API_URL}/api/chores/today`);
+                const assignments = await assignRes.json();
+                await showAssignments(assignments.cooks || [], assignments.dish_washer || []);
+            }
+        } catch (err) {
+            showMessage('error', 'An unexpected error occurred.');
+        }
+    }
 
     loadMembers();
     loadTodaysAssignments();
@@ -146,7 +282,6 @@ async function initPeoplePage() {
         e.preventDefault();
         const name = newMemberNameInput.value.trim();
         if (!name) return;
-
         try {
             const formData = new FormData();
             formData.append('name', name);
@@ -154,7 +289,6 @@ async function initPeoplePage() {
                 method: 'POST',
                 body: formData
             });
-
             if (response.ok) {
                 newMemberNameInput.value = '';
                 loadMembers();
@@ -180,7 +314,6 @@ async function initPeoplePage() {
                         method: 'POST',
                         body: formData
                     });
-
                     if (response.ok) {
                         loadMembers();
                         showMessage('success', `${memberName} was removed.`);
@@ -205,7 +338,7 @@ async function initHistoryPage() {
         const response = await fetch(`${API_URL}/api/history/summary`);
         const summary = await response.json();
         if (summary.length === 0) {
-            historyTableBody.innerHTML = '<tr><td colspan="5">No history data available.</td></tr>';
+            historyTableBody.innerHTML = '<tr><td colspan="5">No history data available. Add members and assign chores.</td></tr>';
             return;
         }
         summary.forEach(item => {
