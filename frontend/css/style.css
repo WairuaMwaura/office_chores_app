@@ -35,6 +35,7 @@ nav {
     display: flex;
     justify-content: center;
     gap: 1rem;
+    flex-wrap: wrap;
 }
 nav a {
     text-decoration: none;
@@ -119,6 +120,10 @@ button.secondary-btn {
 button.secondary-btn:hover {
     background-color: #545b62;
 }
+button.small-btn {
+    padding: 0.3rem 0.7rem;
+    font-size: 0.85rem;
+}
 .form-group {
     display: flex;
     gap: 1rem;
@@ -147,15 +152,40 @@ select {
     text-align: center;
 }
 .assignment-group h3 {
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
     color: var(--secondary-color);
     font-weight: 500;
 }
-.assignment-group p {
-    font-size: 1.3rem;
+.assignment-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.assignment-name {
+    font-size: 1.2rem;
     font-weight: 600;
-    margin: 0;
+}
+.swap-btn {
+    background-color: #e9ecef;
     color: var(--text-color);
+    border: 1px solid var(--border-color);
+    font-size: 0.8rem;
+    padding: 0.2rem 0.5rem;
+}
+.swap-btn:hover {
+    background-color: #dee2e6;
+}
+.late-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+}
+#late-arrival-context {
+    color: var(--secondary-color);
+    margin-bottom: 0.75rem;
 }
 .message {
     padding: 1rem;
@@ -191,12 +221,123 @@ th, td {
 th {
     background-color: #f2f2f2;
 }
-#late-arrival-context {
+
+/* ── Modal ── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal {
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 2rem;
+    max-width: 420px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+}
+.modal h3 {
+    margin-top: 0;
+    color: var(--primary-color);
+    margin-bottom: 0.5rem;
+}
+.modal p {
     color: var(--secondary-color);
     margin-bottom: 1rem;
 }
-#late-arrival-actions {
+.modal select {
+    width: 100%;
+    margin-bottom: 1.25rem;
+}
+.modal-actions {
     display: flex;
-    flex-wrap: wrap;
     gap: 0.75rem;
+    justify-content: flex-end;
+}
+
+/* ── Schedule ── */
+.schedule-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.75rem;
+    margin-bottom: 1rem;
+}
+.schedule-header h2 {
+    margin: 0;
+    border: none;
+    padding: 0;
+}
+.view-toggle {
+    display: flex;
+    gap: 0.5rem;
+}
+.toggle-btn {
+    padding: 0.4rem 1rem;
+    background-color: #e9ecef;
+    color: var(--text-color);
+    font-size: 0.9rem;
+    border: 1px solid var(--border-color);
+}
+.toggle-btn:hover {
+    background-color: #dee2e6;
+}
+.toggle-btn.active {
+    background-color: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+/* Grid view */
+.schedule-grid {
+    overflow-x: auto;
+}
+.grid-row {
+    display: flex;
+    border-bottom: 1px solid #eee;
+}
+.grid-row:last-child {
+    border-bottom: none;
+}
+.grid-header {
+    background-color: #f2f2f2;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+}
+.grid-cell {
+    min-width: 48px;
+    padding: 0.5rem 0.4rem;
+    text-align: center;
+    font-size: 0.9rem;
+    border-right: 1px solid #eee;
+}
+.grid-cell:last-child {
+    border-right: none;
+}
+.grid-label {
+    min-width: 110px;
+    text-align: left;
+    font-weight: 500;
+    padding-left: 0.5rem;
+    position: sticky;
+    left: 0;
+    background: inherit;
+}
+.grid-date {
+    font-size: 0.75rem;
+    color: var(--secondary-color);
+}
+.grid-cook {
+    background-color: #fff3cd;
+}
+.grid-dish {
+    background-color: #d1ecf1;
 }

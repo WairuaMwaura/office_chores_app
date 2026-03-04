@@ -15,6 +15,7 @@
             <a href="/">Today's Chores</a>
             <a href="/people">Manage People</a>
             <a href="/history">History</a>
+            <a href="/schedule">Schedule</a>
         </nav>
         <div id="message-container"></div>
 
@@ -36,31 +37,49 @@
             <div id="assignments-display" class="assignments-display">
                 <div class="assignment-group">
                     <h3>🍳 Cooking</h3>
-                    <p id="cooks-list">Not assigned yet</p>
+                    <div id="cooks-list-container"></div>
+                    <p id="cooks-placeholder" style="font-size:1.1rem; color: var(--secondary-color);">Not assigned yet</p>
                 </div>
                 <div class="assignment-group">
                     <h3>💧 Washing Dishes</h3>
-                    <p id="dishes-list">Not assigned yet</p>
+                    <div id="dishes-list-container"></div>
+                    <p id="dishes-placeholder" style="font-size:1.1rem; color: var(--secondary-color);">Not assigned yet</p>
                 </div>
             </div>
         </div>
 
-        <!-- Late Arrival Card (shown only after chores are assigned) -->
+        <!-- Late Arrival Card -->
         <div class="card" id="late-arrival-card" style="display:none;">
             <h2>Mark Late Arrival</h2>
             <p>Someone arrived after chores were assigned? Record them here.</p>
             <div class="form-group">
-                <select id="late-member-select" style="flex-grow:1; padding:0.75rem; font-size:1rem; border:1px solid var(--border-color); border-radius:5px;">
+                <select id="late-member-select">
                     <option value="">— Select member —</option>
                 </select>
                 <button id="check-late-btn">Check Options</button>
             </div>
             <div id="late-arrival-options" style="display:none;">
-                <p id="late-arrival-context" style="color: var(--secondary-color); margin-bottom: 1rem;"></p>
-                <div id="late-arrival-actions" class="button-container" style="text-align:left; display:flex; flex-wrap:wrap; gap:0.75rem;"></div>
+                <p id="late-arrival-context"></p>
+                <div id="late-arrival-actions" class="late-actions"></div>
             </div>
         </div>
     </div>
+
+    <!-- Swap Modal -->
+    <div id="swap-modal" class="modal-overlay" style="display:none;">
+        <div class="modal">
+            <h3 id="swap-modal-title">Replace Assigned Person</h3>
+            <p id="swap-modal-context"></p>
+            <select id="swap-member-select">
+                <option value="">— Select replacement —</option>
+            </select>
+            <div class="modal-actions">
+                <button id="swap-confirm-btn">Confirm Swap</button>
+                <button class="secondary-btn" id="swap-cancel-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
 </body>
 </html>

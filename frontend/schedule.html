@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Office Chores - Schedule</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Office Chore Manager</h1>
+        </header>
+        <nav>
+            <a href="/">Today's Chores</a>
+            <a href="/people">Manage People</a>
+            <a href="/history">History</a>
+            <a href="/schedule">Schedule</a>
+        </nav>
+        <div id="message-container"></div>
+
+        <div class="card">
+            <div class="schedule-header">
+                <h2>Chore Schedule — Last 30 Days</h2>
+                <div class="view-toggle">
+                    <button id="view-table-btn" class="toggle-btn active">Table View</button>
+                    <button id="view-grid-btn" class="toggle-btn">Grid View</button>
+                </div>
+            </div>
+
+            <div id="schedule-table-view">
+                <table id="schedule-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>🍳 Cooks</th>
+                            <th>💧 Dish Washer</th>
+                        </tr>
+                    </thead>
+                    <tbody id="schedule-table-body">
+                        <tr><td colspan="3">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="schedule-grid-view" style="display:none;">
+                <div id="schedule-grid" class="schedule-grid"></div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,36 +1,27 @@
 # backend/logic.py
 import random
+import math
 from datetime import date, timedelta
 from .database import get_db_connection, db_config
 import mysql.connector
-from mysql.connector import errorcode
 
 
 def _add_score_adjustment_column_if_not_exists():
     conn = get_db_connection()
     if not conn:
-        print("DB connection failed, cannot check/update schema.")
         return
     cursor = conn.cursor()
     try:
         cursor.execute(f"""
-            SELECT COUNT(*) 
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = '{db_config["database"]}' 
-            AND TABLE_NAME = 'members' 
-            AND COLUMN_NAME = 'score_adjustment'
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = '{db_config["database"]}'
+            AND TABLE_NAME = 'members' AND COLUMN_NAME = 'score_adjustment'
         """)
         if cursor.fetchone()[0] == 0:
-            print("Column 'score_adjustment' not found. Adding it now...")
-            cursor.execute(
-                "ALTER TABLE members ADD COLUMN score_adjustment FLOAT NOT NULL DEFAULT 0"
-            )
-            conn.commit()
+            cursor.execute("ALTER TABLE members ADD COLUMN score_adjustment FLOAT NOT NULL DEFAULT 0")
         else:
-            cursor.execute(
-                "ALTER TABLE members MODIFY COLUMN score_adjustment FLOAT NOT NULL DEFAULT 0"
-            )
-            conn.commit()
+            cursor.execute("ALTER TABLE members MODIFY COLUMN score_adjustment FLOAT NOT NULL DEFAULT 0")
+        conn.commit()
     except mysql.connector.Error as err:
         print(f"Failed to alter table: {err}")
     finally:
@@ -44,19 +35,41 @@ _add_score_adjustment_column_if_not_exists()
 def _get_chore_rate(member_id: int, conn) -> float:
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s",
-            (member_id,)
-        )
+        cursor.execute("SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s", (member_id,))
         total_chores = cursor.fetchone()[0]
-        cursor.execute(
-            "SELECT COUNT(*) FROM attendance WHERE member_id = %s AND is_present = TRUE",
-            (member_id,)
-        )
+        cursor.execute("SELECT COUNT(*) FROM attendance WHERE member_id = %s AND is_present = TRUE", (member_id,))
         total_days_present = cursor.fetchone()[0]
         if total_days_present == 0:
             return 0.0
         return total_chores / total_days_present
+    finally:
+        cursor.close()
+
+
+def _did_chore_yesterday(member_id: int, conn) -> bool:
+    """Returns True if this member was assigned any chore yesterday."""
+    yesterday = date.today() - timedelta(days=1)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s AND assignment_date = %s",
+            (member_id, yesterday)
+        )
+        return cursor.fetchone()[0] > 0
+    finally:
+        cursor.close()
+
+
+def _get_members_who_did_chore_yesterday(conn) -> set:
+    """Returns set of member_ids who did any chore yesterday."""
+    yesterday = date.today() - timedelta(days=1)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT DISTINCT member_id FROM chore_assignments WHERE assignment_date = %s",
+            (yesterday,)
+        )
+        return {row[0] for row in cursor.fetchall()}
     finally:
         cursor.close()
 
@@ -67,9 +80,7 @@ def get_all_members_with_scores():
         return []
     cursor = conn.cursor(dictionary=True)
     try:
-        cursor.execute(
-            "SELECT member_id, name, score_adjustment FROM members WHERE is_active = TRUE"
-        )
+        cursor.execute("SELECT member_id, name, score_adjustment FROM members WHERE is_active = TRUE")
         members = cursor.fetchall()
         for member in members:
             actual_rate = _get_chore_rate(member['member_id'], conn)
@@ -93,6 +104,35 @@ def _get_highest_chore_rate(conn) -> float:
         cursor.close()
 
 
+def _select_weighted_unique(eligible: list, k: int, did_yesterday: set) -> list:
+    """
+    Selects k unique members using exponential inverse weighting on chore rate.
+    Members who did a chore yesterday are excluded UNLESS there aren't enough
+    others to fill all slots (i.e. everyone present did chores yesterday).
+    """
+    DECAY = 4.0
+
+    # Try to exclude yesterday's workers first
+    preferred = [m for m in eligible if m['member_id'] not in did_yesterday]
+    pool = preferred if len(preferred) >= k else eligible  # fall back if not enough
+
+    if len(pool) <= k:
+        return pool[:]
+
+    selected = []
+    remaining = pool[:]
+
+    while len(selected) < k and remaining:
+        rates = [m['chore_rate'] for m in remaining]
+        max_rate = max(rates) if max(rates) > 0 else 1.0
+        weights = [math.exp(-DECAY * (r / (max_rate + 0.0001))) for r in rates]
+        pick = random.choices(remaining, weights=weights, k=1)[0]
+        selected.append(pick)
+        remaining = [m for m in remaining if m['member_id'] != pick['member_id']]
+
+    return selected
+
+
 def add_member(name: str):
     conn = get_db_connection()
     if not conn:
@@ -100,12 +140,9 @@ def add_member(name: str):
     cursor = conn.cursor()
     try:
         highest_rate = _get_highest_chore_rate(conn)
-        cursor.execute(
-            "INSERT INTO members (name, score_adjustment) VALUES (%s, %s)",
-            (name, highest_rate)
-        )
+        cursor.execute("INSERT INTO members (name, score_adjustment) VALUES (%s, %s)", (name, highest_rate))
         conn.commit()
-        return {"message": f"Member '{name}' added successfully with starting chore rate of {highest_rate:.2f}."}
+        return {"message": f"Member '{name}' added with starting chore rate of {highest_rate:.2f}."}
     except Exception as err:
         return {"error": f"Failed to add member: {err}"}
     finally:
@@ -119,12 +156,9 @@ def remove_member(member_id: int):
         return {"error": "Database connection failed."}
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "UPDATE members SET is_active = FALSE WHERE member_id = %s",
-            (member_id,)
-        )
+        cursor.execute("UPDATE members SET is_active = FALSE WHERE member_id = %s", (member_id,))
         conn.commit()
-        return {"message": f"Member with ID {member_id} has been removed."}
+        return {"message": f"Member {member_id} deactivated."}
     except Exception as err:
         return {"error": f"Failed to remove member: {err}"}
     finally:
@@ -138,9 +172,7 @@ def get_active_members():
         return []
     cursor = conn.cursor(dictionary=True)
     try:
-        cursor.execute(
-            "SELECT member_id, name FROM members WHERE is_active = TRUE ORDER BY name"
-        )
+        cursor.execute("SELECT member_id, name FROM members WHERE is_active = TRUE ORDER BY name")
         return cursor.fetchall()
     except Exception as err:
         print(f"Failed to get members: {err}")
@@ -151,7 +183,6 @@ def get_active_members():
 
 
 def get_absent_members_today():
-    """Returns active members who are absent or unrecorded for today."""
     conn = get_db_connection()
     if not conn:
         return []
@@ -159,8 +190,7 @@ def get_absent_members_today():
     today = date.today()
     try:
         cursor.execute("""
-            SELECT m.member_id, m.name
-            FROM members m
+            SELECT m.member_id, m.name FROM members m
             WHERE m.is_active = TRUE
             AND m.member_id NOT IN (
                 SELECT member_id FROM attendance
@@ -175,10 +205,6 @@ def get_absent_members_today():
 
 
 def get_todays_chore_status():
-    """
-    Returns current chore assignments for today and whether slots are still open.
-    Used to determine late arrival options.
-    """
     conn = get_db_connection()
     if not conn:
         return None
@@ -193,13 +219,10 @@ def get_todays_chore_status():
             WHERE ca.assignment_date = %s
         """, (today,))
         assignments = cursor.fetchall()
-
         cooks = [a for a in assignments if a['chore_type'] == 'Cooking']
         dish_washers = [a for a in assignments if a['chore_type'] == 'Washing Dishes']
-
         cooks_filled = len(cooks) >= 2
         dish_filled = len(dish_washers) >= 1 or is_friday
-
         return {
             "chores_assigned": len(assignments) > 0,
             "is_friday": is_friday,
@@ -214,40 +237,72 @@ def get_todays_chore_status():
         conn.close()
 
 
-def mark_late_arrival(member_id: int, action: str, swap_assignment_id: int = None):
+def swap_assignment(assignment_id: int, new_member_id: int):
     """
-    Records a late arrival and handles chore reassignment if needed.
+    Swaps an existing chore assignment to a different member.
+    Reverses the chore record for the original member and assigns it to the new one.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Database connection failed."}
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # Get original assignment
+        cursor.execute(
+            "SELECT * FROM chore_assignments WHERE assignment_id = %s",
+            (assignment_id,)
+        )
+        assignment = cursor.fetchone()
+        if not assignment:
+            return {"error": "Assignment not found."}
 
-    action:
-      - "attendance_only"  : just mark them present, no chore changes
-      - "fill_gap"         : assign them to an unfilled chore slot
-      - "swap_dishes"      : they take over dish washing; original washer's score is reversed
-    """
+        # Get new member name for response
+        cursor.execute("SELECT name FROM members WHERE member_id = %s", (new_member_id,))
+        new_member = cursor.fetchone()
+        if not new_member:
+            return {"error": "New member not found."}
+
+        # Get old member name
+        cursor.execute("SELECT name FROM members WHERE member_id = %s", (assignment['member_id'],))
+        old_member = cursor.fetchone()
+
+        # Update assignment to new member
+        cursor.execute(
+            "UPDATE chore_assignments SET member_id = %s WHERE assignment_id = %s",
+            (new_member_id, assignment_id)
+        )
+        conn.commit()
+
+        return {
+            "message": f"Reassigned {assignment['chore_type']} from {old_member['name']} to {new_member['name']}."
+        }
+    except Exception as err:
+        return {"error": f"Failed to swap assignment: {err}"}
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def mark_late_arrival(member_id: int, action: str, swap_assignment_id: int = None):
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed."}
     cursor = conn.cursor(dictionary=True)
     today = date.today()
     is_friday = (today.weekday() == 4)
-
     try:
-        # 1. Mark them present today
-        cursor.execute("""
-            REPLACE INTO attendance (member_id, attendance_date, is_present)
-            VALUES (%s, %s, TRUE)
-        """, (member_id, today))
-
+        cursor.execute(
+            "REPLACE INTO attendance (member_id, attendance_date, is_present) VALUES (%s, %s, TRUE)",
+            (member_id, today)
+        )
         if action == "attendance_only":
             conn.commit()
             return {"message": "Attendance recorded. No chore changes made."}
-
         elif action == "fill_gap":
-            # Determine which slot is open
             status = get_todays_chore_status()
             if not status or status['fully_staffed']:
                 conn.commit()
                 return {"error": "No open chore slots to fill."}
-
             if len(status['cooks']) < 2:
                 chore_type = 'Cooking'
             elif not status['dish_filled'] and not is_friday:
@@ -255,50 +310,31 @@ def mark_late_arrival(member_id: int, action: str, swap_assignment_id: int = Non
             else:
                 conn.commit()
                 return {"error": "No open chore slots to fill."}
-
-            cursor.execute("""
-                INSERT INTO chore_assignments (member_id, chore_type, assignment_date)
-                VALUES (%s, %s, %s)
-            """, (member_id, chore_type, today))
+            cursor.execute(
+                "INSERT INTO chore_assignments (member_id, chore_type, assignment_date) VALUES (%s, %s, %s)",
+                (member_id, chore_type, today)
+            )
             conn.commit()
             return {"message": f"Attendance recorded and assigned to {chore_type}."}
-
         elif action == "swap_dishes":
             if not swap_assignment_id:
                 return {"error": "No assignment ID provided for swap."}
-
-            # Get the original dish washer assignment
-            cursor.execute("""
-                SELECT * FROM chore_assignments
-                WHERE assignment_id = %s AND chore_type = 'Washing Dishes'
-            """, (swap_assignment_id,))
+            cursor.execute(
+                "SELECT * FROM chore_assignments WHERE assignment_id = %s AND chore_type = 'Washing Dishes'",
+                (swap_assignment_id,)
+            )
             original = cursor.fetchone()
             if not original:
                 return {"error": "Original dish washer assignment not found."}
-
-            original_member_id = original['member_id']
-
-            # Remove the original dish washer assignment
+            cursor.execute("DELETE FROM chore_assignments WHERE assignment_id = %s", (swap_assignment_id,))
             cursor.execute(
-                "DELETE FROM chore_assignments WHERE assignment_id = %s",
-                (swap_assignment_id,)
+                "INSERT INTO chore_assignments (member_id, chore_type, assignment_date) VALUES (%s, 'Washing Dishes', %s)",
+                (member_id, today)
             )
-
-            # Assign the latecomer to dish washing
-            cursor.execute("""
-                INSERT INTO chore_assignments (member_id, chore_type, assignment_date)
-                VALUES (%s, 'Washing Dishes', %s)
-            """, (member_id, today))
-
             conn.commit()
-            return {
-                "message": f"Attendance recorded. Dish washing reassigned. Original member's score has been adjusted.",
-                "original_member_id": original_member_id
-            }
-
+            return {"message": "Attendance recorded. Dish washing reassigned successfully."}
         else:
             return {"error": f"Unknown action: {action}"}
-
     except Exception as err:
         return {"error": f"Failed to process late arrival: {err}"}
     finally:
@@ -338,10 +374,8 @@ def assign_chores_for_today():
     is_friday = (today.weekday() == 4)
     min_required = 2 if is_friday else 3
     chores_to_assign = 2 if is_friday else 3
-
     try:
-        cursor.execute(
-            "SELECT * FROM chore_assignments WHERE assignment_date = %s", (today,))
+        cursor.execute("SELECT * FROM chore_assignments WHERE assignment_date = %s", (today,))
         if cursor.fetchone():
             return None, "Chores have already been assigned for today."
 
@@ -362,21 +396,8 @@ def assign_chores_for_today():
         if len(eligible) < chores_to_assign:
             return None, "Not enough eligible members to assign chores."
 
-        max_rate = max(m['chore_rate'] for m in eligible) + 0.01
-        weights = [max_rate - m['chore_rate'] + 0.01 for m in eligible]
-
-        selected_ids = set()
-        selected = []
-        attempts = 0
-        while len(selected) < chores_to_assign and attempts < 500:
-            pick = random.choices(eligible, weights=weights, k=1)[0]
-            if pick['member_id'] not in selected_ids:
-                selected.append(pick)
-                selected_ids.add(pick['member_id'])
-            attempts += 1
-
-        if len(selected) < chores_to_assign:
-            selected = random.sample(eligible, chores_to_assign)
+        did_yesterday = _get_members_who_did_chore_yesterday(conn)
+        selected = _select_weighted_unique(eligible, chores_to_assign, did_yesterday)
 
         assignments = {}
         assignment_data = []
@@ -427,7 +448,11 @@ def get_daily_assignments(assignment_date: date):
         )
         for row in cursor.fetchall():
             if row['chore_type'] == 'Cooking':
-                assignments['cooks'].append(row['name'])
+                assignments['cooks'].append({
+                    'name': row['name'],
+                    'assignment_id': row['assignment_id'],
+                    'member_id': row['member_id']
+                })
             else:
                 assignments['dish_washer'].append({
                     'name': row['name'],
@@ -440,40 +465,72 @@ def get_daily_assignments(assignment_date: date):
         conn.close()
 
 
+def get_schedule(days: int = 30):
+    """
+    Returns a schedule of chore assignments for the last N days.
+    Each entry: { date, day_name, cooks: [...], dish_washer: [...] }
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    cursor = conn.cursor(dictionary=True)
+    today = date.today()
+    start_date = today - timedelta(days=days - 1)
+    try:
+        cursor.execute("""
+            SELECT ca.assignment_date, ca.chore_type, m.name
+            FROM chore_assignments ca
+            JOIN members m ON ca.member_id = m.member_id
+            WHERE ca.assignment_date BETWEEN %s AND %s
+            ORDER BY ca.assignment_date DESC
+        """, (start_date, today))
+        rows = cursor.fetchall()
+
+        # Group by date
+        days_map = {}
+        for row in rows:
+            d = row['assignment_date'].isoformat()
+            if d not in days_map:
+                days_map[d] = {
+                    "date": d,
+                    "day_name": row['assignment_date'].strftime("%A, %b %d"),
+                    "cooks": [],
+                    "dish_washer": []
+                }
+            if row['chore_type'] == 'Cooking':
+                days_map[d]['cooks'].append(row['name'])
+            else:
+                days_map[d]['dish_washer'].append(row['name'])
+
+        return list(days_map.values())
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def get_history_summary():
     conn = get_db_connection()
     if not conn:
         return []
     cursor = conn.cursor(dictionary=True)
     try:
-        cursor.execute(
-            "SELECT member_id, name FROM members WHERE is_active = TRUE ORDER BY name"
-        )
+        cursor.execute("SELECT member_id, name FROM members WHERE is_active = TRUE ORDER BY name")
         members = cursor.fetchall()
         summary = []
         today = date.today()
         start_of_week = today - timedelta(days=today.weekday())
-
         for member in members:
             mid = member['member_id']
-
-            cursor.execute(
-                "SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s", (mid,))
+            cursor.execute("SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s", (mid,))
             total_chores = cursor.fetchone()['total']
-
-            cursor.execute(
-                "SELECT COUNT(*) as total FROM attendance WHERE member_id = %s AND is_present = TRUE", (mid,))
+            cursor.execute("SELECT COUNT(*) as total FROM attendance WHERE member_id = %s AND is_present = TRUE", (mid,))
             days_present = cursor.fetchone()['total']
-
             chore_rate = round(total_chores / days_present, 3) if days_present > 0 else 0.0
-
             cursor.execute(
-                "SELECT COUNT(*) as total FROM chore_assignments "
-                "WHERE member_id = %s AND assignment_date >= %s",
+                "SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s AND assignment_date >= %s",
                 (mid, start_of_week)
             )
             chores_this_week = cursor.fetchone()['total']
-
             summary.append({
                 "name": member['name'],
                 "total_chores": total_chores,
