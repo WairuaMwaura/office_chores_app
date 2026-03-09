@@ -15,8 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function setActiveNav() {
     const path = window.location.pathname;
     document.querySelectorAll('nav a').forEach(link => {
-        const linkPath = new URL(link.href).pathname;
-        if (linkPath === path) link.classList.add('active');
+        if (new URL(link.href).pathname === path) link.classList.add('active');
     });
 }
 
@@ -36,7 +35,6 @@ async function initIndexPage() {
     const assignButton = document.getElementById('assign-chores-btn');
     const lateArrivalCard = document.getElementById('late-arrival-card');
 
-    // ── Load member checklist ──
     async function loadMembers() {
         try {
             const members = await fetchJSON('/api/members');
@@ -58,7 +56,6 @@ async function initIndexPage() {
         }
     }
 
-    // ── Render assignments with swap buttons ──
     function renderAssignments(cooks, dishWasher) {
         const cooksContainer = document.getElementById('cooks-list-container');
         const dishesContainer = document.getElementById('dishes-list-container');
@@ -70,10 +67,7 @@ async function initIndexPage() {
 
         if (cooks.length > 0) {
             cooksPlaceholder.style.display = 'none';
-            cooks.forEach(c => {
-                const item = assignmentItem(typeof c === 'object' ? c : { name: c, assignment_id: null });
-                cooksContainer.appendChild(item);
-            });
+            cooks.forEach(c => cooksContainer.appendChild(assignmentItem(c)));
         } else {
             cooksPlaceholder.style.display = 'block';
         }
@@ -83,10 +77,9 @@ async function initIndexPage() {
             dishWasher.forEach(d => {
                 const nameStr = typeof d === 'object' ? d.name : d;
                 if (nameStr === 'N/A (Friday)') {
-                    dishesContainer.innerHTML = `<p style="font-size:1.1rem; font-weight:600;">N/A (Friday)</p>`;
+                    dishesContainer.innerHTML = `<p style="font-size:1.1rem;font-weight:600;">N/A (Friday)</p>`;
                 } else {
-                    const item = assignmentItem(typeof d === 'object' ? d : { name: d, assignment_id: null });
-                    dishesContainer.appendChild(item);
+                    dishesContainer.appendChild(assignmentItem(d));
                 }
             });
         } else {
@@ -95,14 +88,14 @@ async function initIndexPage() {
     }
 
     function assignmentItem(person) {
+        const p = typeof person === 'object' ? person : { name: person, assignment_id: null };
         const div = document.createElement('div');
         div.className = 'assignment-item';
         div.innerHTML = `
-            <span class="assignment-name">${person.name}</span>
-            ${person.assignment_id
-                ? `<button class="swap-btn small-btn" data-assignment-id="${person.assignment_id}" data-name="${person.name}">↔ Swap</button>`
-                : ''}
-        `;
+            <span class="assignment-name">${p.name}</span>
+            ${p.assignment_id
+                ? `<button class="swap-btn small-btn" data-assignment-id="${p.assignment_id}" data-name="${p.name}">↔ Swap</button>`
+                : ''}`;
         return div;
     }
 
@@ -110,28 +103,25 @@ async function initIndexPage() {
     let activeSwapAssignmentId = null;
 
     document.addEventListener('click', async (e) => {
-        if (e.target.classList.contains('swap-btn')) {
-            activeSwapAssignmentId = parseInt(e.target.dataset.assignmentId);
-            const currentName = e.target.dataset.name;
-            document.getElementById('swap-modal-title').textContent = `Replace ${currentName}`;
-            document.getElementById('swap-modal-context').textContent =
-                `Select who should take over this chore from ${currentName}.`;
+        if (!e.target.classList.contains('swap-btn')) return;
+        activeSwapAssignmentId = parseInt(e.target.dataset.assignmentId);
+        const currentName = e.target.dataset.name;
+        document.getElementById('swap-modal-title').textContent = `Replace ${currentName}`;
+        document.getElementById('swap-modal-context').textContent =
+            `Select who should take over this chore from ${currentName}.`;
 
-            // Populate swap dropdown with all members except current
-            const members = await fetchJSON('/api/members');
-            const select = document.getElementById('swap-member-select');
-            select.innerHTML = '<option value="">— Select replacement —</option>';
-            members.forEach(m => {
-                if (m.name !== currentName) {
-                    const opt = document.createElement('option');
-                    opt.value = m.member_id;
-                    opt.textContent = m.name;
-                    select.appendChild(opt);
-                }
-            });
-
-            document.getElementById('swap-modal').style.display = 'flex';
-        }
+        const members = await fetchJSON('/api/members');
+        const select = document.getElementById('swap-member-select');
+        select.innerHTML = '<option value="">— Select replacement —</option>';
+        members.forEach(m => {
+            if (m.name !== currentName) {
+                const opt = document.createElement('option');
+                opt.value = m.member_id;
+                opt.textContent = m.name;
+                select.appendChild(opt);
+            }
+        });
+        document.getElementById('swap-modal').style.display = 'flex';
     });
 
     document.getElementById('swap-cancel-btn').addEventListener('click', () => {
@@ -139,12 +129,13 @@ async function initIndexPage() {
         activeSwapAssignmentId = null;
     });
 
+    document.getElementById('swap-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'swap-modal') document.getElementById('swap-modal').style.display = 'none';
+    });
+
     document.getElementById('swap-confirm-btn').addEventListener('click', async () => {
         const newMemberId = parseInt(document.getElementById('swap-member-select').value);
-        if (!newMemberId) {
-            showMessage('error', 'Please select a replacement.');
-            return;
-        }
+        if (!newMemberId) { showMessage('error', 'Please select a replacement.'); return; }
         try {
             const result = await postJSON('/api/chores/swap', {
                 assignment_id: activeSwapAssignmentId,
@@ -159,20 +150,12 @@ async function initIndexPage() {
         }
     });
 
-    // Close modal on overlay click
-    document.getElementById('swap-modal').addEventListener('click', (e) => {
-        if (e.target.id === 'swap-modal') {
-            document.getElementById('swap-modal').style.display = 'none';
-        }
-    });
-
     async function refreshAssignments() {
         const assignments = await fetchJSON('/api/chores/today');
         renderAssignments(assignments.cooks || [], assignments.dish_washer || []);
         await loadLateArrivalSection();
     }
 
-    // ── Load today's assignments on page load ──
     async function loadTodaysAssignments() {
         try {
             const assignments = await fetchJSON('/api/chores/today');
@@ -188,18 +171,15 @@ async function initIndexPage() {
         }
     }
 
-    // ── Assign chores button ──
     assignButton.addEventListener('click', async () => {
         const checkedBoxes = document.querySelectorAll('#attendance-list input[type="checkbox"]:checked');
         const present_ids = Array.from(checkedBoxes).map(cb => parseInt(cb.value));
-
         try {
             await postJSON('/api/attendance', { present_ids });
         } catch {
             showMessage('error', 'Failed to mark attendance.');
             return;
         }
-
         try {
             const result = await postJSON('/api/chores/assign', {});
             renderAssignments(result.assignments.cooks, result.assignments.dish_washer);
@@ -217,19 +197,16 @@ async function initIndexPage() {
             const absentMembers = await fetchJSON('/api/attendance/absent-today');
             const select = document.getElementById('late-member-select');
             select.innerHTML = '<option value="">— Select member —</option>';
-
             if (absentMembers.length === 0) {
                 lateArrivalCard.style.display = 'none';
                 return;
             }
-
-            absentMembers.forEach(member => {
+            absentMembers.forEach(m => {
                 const opt = document.createElement('option');
-                opt.value = member.member_id;
-                opt.textContent = member.name;
+                opt.value = m.member_id;
+                opt.textContent = m.name;
                 select.appendChild(opt);
             });
-
             document.getElementById('late-arrival-options').style.display = 'none';
             lateArrivalCard.style.display = 'block';
         } catch {
@@ -253,29 +230,25 @@ async function initIndexPage() {
         if (!status.chores_assigned) {
             contextP.textContent = `Chores haven't been assigned yet. ${memberName} will be included when chores are assigned.`;
             addBtn(actionsDiv, 'Note Attendance Only', '', () => submitLate(memberId, 'attendance_only'));
-            return;
-        }
-        if (status.is_friday) {
+        } else if (status.is_friday) {
             contextP.textContent = `It's Friday — no dish washer slot. ${memberName} can only be noted as present.`;
             addBtn(actionsDiv, 'Note Attendance Only', '', () => submitLate(memberId, 'attendance_only'));
-            return;
-        }
-        if (!status.fully_staffed) {
+        } else if (!status.fully_staffed) {
             const missing = !status.cooks_filled ? 'Cook' : 'Dish Washer';
             contextP.textContent = `There's an open ${missing} slot. ${memberName} can fill it.`;
             addBtn(actionsDiv, `Assign as ${missing}`, '', () => submitLate(memberId, 'fill_gap'));
             addBtn(actionsDiv, 'Just Note Attendance', 'secondary-btn', () => submitLate(memberId, 'attendance_only'));
-            return;
-        }
-        const dws = status.dish_washers || [];
-        if (dws.length > 0) {
-            const dw = dws[0];
-            contextP.textContent = `All chores assigned. ${memberName} can take over dish washing from ${dw.name}, or just be noted as present.`;
-            addBtn(actionsDiv, `${memberName} does dishes (swap with ${dw.name})`, '', () => submitLate(memberId, 'swap_dishes', dw.assignment_id));
-            addBtn(actionsDiv, 'Just Note Attendance', 'secondary-btn', () => submitLate(memberId, 'attendance_only'));
         } else {
-            contextP.textContent = `All chores are assigned. ${memberName} will just be noted as present.`;
-            addBtn(actionsDiv, 'Note Attendance Only', '', () => submitLate(memberId, 'attendance_only'));
+            const dws = status.dish_washers || [];
+            if (dws.length > 0) {
+                const dw = dws[0];
+                contextP.textContent = `All chores assigned. ${memberName} can take over dish washing from ${dw.name}, or just be noted as present.`;
+                addBtn(actionsDiv, `${memberName} does dishes (swap with ${dw.name})`, '', () => submitLate(memberId, 'swap_dishes', dw.assignment_id));
+                addBtn(actionsDiv, 'Just Note Attendance', 'secondary-btn', () => submitLate(memberId, 'attendance_only'));
+            } else {
+                contextP.textContent = `All chores are assigned. ${memberName} will just be noted as present.`;
+                addBtn(actionsDiv, 'Note Attendance Only', '', () => submitLate(memberId, 'attendance_only'));
+            }
         }
     });
 
@@ -331,20 +304,16 @@ async function initPeoplePage() {
         e.preventDefault();
         const name = newMemberNameInput.value.trim();
         if (!name) return;
-        try {
-            const formData = new FormData();
-            formData.append('name', name);
-            const response = await fetch(`${API_URL}/api/members/add`, { method: 'POST', body: formData });
-            const result = await response.json();
-            if (response.ok) {
-                newMemberNameInput.value = '';
-                loadMembers();
-                showMessage('success', `Member "${name}" added.`);
-            } else {
-                showMessage('error', result.error || 'Failed to add member.');
-            }
-        } catch {
-            showMessage('error', 'An unexpected error occurred.');
+        const formData = new FormData();
+        formData.append('name', name);
+        const response = await fetch(`${API_URL}/api/members/add`, { method: 'POST', body: formData });
+        const result = await response.json();
+        if (response.ok) {
+            newMemberNameInput.value = '';
+            loadMembers();
+            showMessage('success', `Member "${name}" added.`);
+        } else {
+            showMessage('error', result.error || 'Failed to add member.');
         }
     });
 
@@ -353,19 +322,15 @@ async function initPeoplePage() {
         const memberId = e.target.dataset.id;
         const memberName = e.target.previousElementSibling.textContent;
         if (!confirm(`Are you sure you want to remove ${memberName}?`)) return;
-        try {
-            const formData = new FormData();
-            formData.append('member_id', memberId);
-            const response = await fetch(`${API_URL}/api/members/remove`, { method: 'POST', body: formData });
-            const result = await response.json();
-            if (response.ok) {
-                loadMembers();
-                showMessage('success', `${memberName} was removed.`);
-            } else {
-                showMessage('error', result.error || 'Failed to remove member.');
-            }
-        } catch {
-            showMessage('error', 'An unexpected error occurred.');
+        const formData = new FormData();
+        formData.append('member_id', memberId);
+        const response = await fetch(`${API_URL}/api/members/remove`, { method: 'POST', body: formData });
+        const result = await response.json();
+        if (response.ok) {
+            loadMembers();
+            showMessage('success', `${memberName} was removed.`);
+        } else {
+            showMessage('error', result.error || 'Failed to remove member.');
         }
     });
 
@@ -380,17 +345,22 @@ async function initHistoryPage() {
     try {
         const summary = await fetchJSON('/api/history/summary');
         if (summary.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5">No history data available.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8">No history data available.</td></tr>';
             return;
         }
+        // Sort by combined score ascending so highest priority is at top
+        summary.sort((a, b) => a.combined_score - b.combined_score);
         summary.forEach(item => {
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>${item.name}</td>
                 <td>${item.chores_this_week}</td>
+                <td>${item.days_present_this_week}</td>
+                <td>${item.weekly_rate}</td>
                 <td>${item.total_chores}</td>
                 <td>${item.days_present}</td>
-                <td>${item.chore_rate}</td>`;
+                <td>${item.alltime_rate}</td>
+                <td><strong>${item.combined_score}</strong></td>`;
             tbody.appendChild(row);
         });
     } catch {
@@ -403,7 +373,6 @@ async function initHistoryPage() {
 // ─────────────────────────────────────────────
 async function initSchedulePage() {
     let scheduleData = [];
-
     try {
         scheduleData = await fetchJSON('/api/schedule?days=30');
     } catch {
@@ -450,31 +419,26 @@ function renderTableView(data) {
 }
 
 function renderGridView(data) {
-    // Collect all unique members
     const memberSet = new Set();
     data.forEach(day => {
         day.cooks.forEach(n => memberSet.add(n));
         day.dish_washer.forEach(n => memberSet.add(n));
     });
     const members = Array.from(memberSet).sort();
-
     const grid = document.getElementById('schedule-grid');
     grid.innerHTML = '';
 
-    // Header row
     const headerRow = document.createElement('div');
     headerRow.className = 'grid-row grid-header';
     headerRow.innerHTML = `<div class="grid-cell grid-label">Member</div>`;
     data.forEach(day => {
         const cell = document.createElement('div');
         cell.className = 'grid-cell grid-date';
-        // Short date e.g. "Mon 02"
         cell.textContent = day.day_name.split(',')[0].slice(0, 3) + ' ' + day.date.slice(8);
         headerRow.appendChild(cell);
     });
     grid.appendChild(headerRow);
 
-    // Member rows
     members.forEach(member => {
         const row = document.createElement('div');
         row.className = 'grid-row';
@@ -494,12 +458,9 @@ function renderGridView(data) {
                 cell.className += ' grid-dish';
                 cell.textContent = '💧';
                 cell.title = 'Washing Dishes';
-            } else {
-                cell.textContent = '';
             }
             row.appendChild(cell);
         });
-
         grid.appendChild(row);
     });
 }

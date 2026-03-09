@@ -32,36 +32,73 @@ def _add_score_adjustment_column_if_not_exists():
 _add_score_adjustment_column_if_not_exists()
 
 
-def _get_chore_rate(member_id: int, conn) -> float:
+def _get_week_bounds() -> tuple:
+    """Returns (start_of_week Monday, today)."""
+    today = date.today()
+    return today - timedelta(days=today.weekday()), today
+
+
+def _get_alltime_chore_rate(member_id: int, conn) -> float:
+    """Total chores / total days present (all-time)."""
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s", (member_id,))
         total_chores = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM attendance WHERE member_id = %s AND is_present = TRUE", (member_id,))
-        total_days_present = cursor.fetchone()[0]
-        if total_days_present == 0:
-            return 0.0
-        return total_chores / total_days_present
+        total_days = cursor.fetchone()[0]
+        return total_chores / total_days if total_days > 0 else 0.0
     finally:
         cursor.close()
 
 
-def _did_chore_yesterday(member_id: int, conn) -> bool:
-    """Returns True if this member was assigned any chore yesterday."""
-    yesterday = date.today() - timedelta(days=1)
+def _get_weekly_chore_rate(member_id: int, conn) -> float:
+    """Chores this calendar week / days attended this calendar week."""
+    start_of_week, today = _get_week_bounds()
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s AND assignment_date = %s",
-            (member_id, yesterday)
+            "SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s AND assignment_date BETWEEN %s AND %s",
+            (member_id, start_of_week, today)
         )
-        return cursor.fetchone()[0] > 0
+        weekly_chores = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT COUNT(*) FROM attendance WHERE member_id = %s AND is_present = TRUE AND attendance_date BETWEEN %s AND %s",
+            (member_id, start_of_week, today)
+        )
+        weekly_days = cursor.fetchone()[0]
+        return weekly_chores / weekly_days if weekly_days > 0 else 0.0
     finally:
         cursor.close()
 
 
+def _get_weekly_chore_count(member_id: int, conn) -> int:
+    """Raw count of chores done this calendar week."""
+    start_of_week, today = _get_week_bounds()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM chore_assignments WHERE member_id = %s AND assignment_date BETWEEN %s AND %s",
+            (member_id, start_of_week, today)
+        )
+        return cursor.fetchone()[0]
+    finally:
+        cursor.close()
+
+
+def _get_combined_score(member_id: int, conn, score_adjustment: float = 0.0) -> float:
+    """
+    Combined fairness score: 70% weekly rate + 30% all-time rate.
+    score_adjustment is used as a floor for new members.
+    Lower = higher priority.
+    """
+    weekly_rate = _get_weekly_chore_rate(member_id, conn)
+    alltime_rate = _get_alltime_chore_rate(member_id, conn)
+    alltime_rate = max(alltime_rate, score_adjustment)
+    weekly_rate = max(weekly_rate, score_adjustment)
+    return 0.7 * weekly_rate + 0.3 * alltime_rate
+
+
 def _get_members_who_did_chore_yesterday(conn) -> set:
-    """Returns set of member_ids who did any chore yesterday."""
     yesterday = date.today() - timedelta(days=1)
     cursor = conn.cursor()
     try:
@@ -74,6 +111,88 @@ def _get_members_who_did_chore_yesterday(conn) -> set:
         cursor.close()
 
 
+def _get_highest_combined_score(conn) -> float:
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT member_id, score_adjustment FROM members WHERE is_active = TRUE")
+        members = cursor.fetchall()
+        if not members:
+            return 0.0
+        scores = [_get_combined_score(m['member_id'], conn, m['score_adjustment']) for m in members]
+        return max(scores)
+    finally:
+        cursor.close()
+
+
+def _weighted_pick_unique(pool: list, k: int, score_key: str = 'combined_score') -> list:
+    """
+    Picks k unique members from pool using exponential inverse weighting
+    on the given score_key. Lower score = higher chance of selection.
+    """
+    DECAY = 4.0
+    if len(pool) <= k:
+        return pool[:]
+
+    selected = []
+    remaining = pool[:]
+
+    while len(selected) < k and remaining:
+        scores = [m[score_key] for m in remaining]
+        max_score = max(scores) if max(scores) > 0 else 1.0
+        weights = [math.exp(-DECAY * (s / (max_score + 0.0001))) for s in scores]
+        pick = random.choices(remaining, weights=weights, k=1)[0]
+        selected.append(pick)
+        remaining = [m for m in remaining if m['member_id'] != pick['member_id']]
+
+    return selected
+
+
+def _select_fair(eligible: list, k: int, did_yesterday: set) -> list:
+    """
+    Strict weekly queue with combined score tiebreaker:
+
+    1. Split eligible into:
+       - Group A: did 0 chores this week (strict priority)
+       - Group B: did 1+ chores this week (overflow only)
+
+    2. Within each group, apply yesterday-blocking first:
+       - Prefer members who did NOT do a chore yesterday
+       - Fall back to full group only if not enough unblocked members
+
+    3. Fill slots from Group A first using all-time rate as tiebreaker.
+       If Group A can't fill all slots, fill remaining from Group B
+       using combined score (70% weekly + 30% all-time) as tiebreaker.
+    """
+    group_a = [m for m in eligible if m['weekly_chore_count'] == 0]
+    group_b = [m for m in eligible if m['weekly_chore_count'] > 0]
+
+    def apply_yesterday_block(group):
+        preferred = [m for m in group if m['member_id'] not in did_yesterday]
+        return preferred if len(preferred) > 0 else group
+
+    selected = []
+
+    # Fill from Group A first
+    slots_remaining = k
+    if group_a:
+        pool_a = apply_yesterday_block(group_a)
+        # Use all-time rate as tiebreaker within Group A
+        picks_a = _weighted_pick_unique(pool_a, slots_remaining, score_key='alltime_rate')
+        selected.extend(picks_a)
+        slots_remaining -= len(picks_a)
+
+    # Fill remaining slots from Group B if needed
+    if slots_remaining > 0 and group_b:
+        # Exclude already selected members
+        selected_ids = {m['member_id'] for m in selected}
+        pool_b = [m for m in group_b if m['member_id'] not in selected_ids]
+        pool_b = apply_yesterday_block(pool_b)
+        picks_b = _weighted_pick_unique(pool_b, slots_remaining, score_key='combined_score')
+        selected.extend(picks_b)
+
+    return selected
+
+
 def get_all_members_with_scores():
     conn = get_db_connection()
     if not conn:
@@ -82,55 +201,15 @@ def get_all_members_with_scores():
     try:
         cursor.execute("SELECT member_id, name, score_adjustment FROM members WHERE is_active = TRUE")
         members = cursor.fetchall()
-        for member in members:
-            actual_rate = _get_chore_rate(member['member_id'], conn)
-            member['chore_rate'] = max(actual_rate, member['score_adjustment'])
+        for m in members:
+            m['combined_score'] = _get_combined_score(m['member_id'], conn, m['score_adjustment'])
+            m['weekly_rate'] = _get_weekly_chore_rate(m['member_id'], conn)
+            m['alltime_rate'] = _get_alltime_chore_rate(m['member_id'], conn)
+            m['weekly_chore_count'] = _get_weekly_chore_count(m['member_id'], conn)
         return members
     finally:
         cursor.close()
         conn.close()
-
-
-def _get_highest_chore_rate(conn) -> float:
-    cursor = conn.cursor(dictionary=True)
-    try:
-        cursor.execute("SELECT member_id FROM members WHERE is_active = TRUE")
-        members = cursor.fetchall()
-        if not members:
-            return 0.0
-        rates = [_get_chore_rate(m['member_id'], conn) for m in members]
-        return max(rates) if rates else 0.0
-    finally:
-        cursor.close()
-
-
-def _select_weighted_unique(eligible: list, k: int, did_yesterday: set) -> list:
-    """
-    Selects k unique members using exponential inverse weighting on chore rate.
-    Members who did a chore yesterday are excluded UNLESS there aren't enough
-    others to fill all slots (i.e. everyone present did chores yesterday).
-    """
-    DECAY = 4.0
-
-    # Try to exclude yesterday's workers first
-    preferred = [m for m in eligible if m['member_id'] not in did_yesterday]
-    pool = preferred if len(preferred) >= k else eligible  # fall back if not enough
-
-    if len(pool) <= k:
-        return pool[:]
-
-    selected = []
-    remaining = pool[:]
-
-    while len(selected) < k and remaining:
-        rates = [m['chore_rate'] for m in remaining]
-        max_rate = max(rates) if max(rates) > 0 else 1.0
-        weights = [math.exp(-DECAY * (r / (max_rate + 0.0001))) for r in rates]
-        pick = random.choices(remaining, weights=weights, k=1)[0]
-        selected.append(pick)
-        remaining = [m for m in remaining if m['member_id'] != pick['member_id']]
-
-    return selected
 
 
 def add_member(name: str):
@@ -139,10 +218,10 @@ def add_member(name: str):
         return {"error": "Database connection failed."}
     cursor = conn.cursor()
     try:
-        highest_rate = _get_highest_chore_rate(conn)
-        cursor.execute("INSERT INTO members (name, score_adjustment) VALUES (%s, %s)", (name, highest_rate))
+        highest = _get_highest_combined_score(conn)
+        cursor.execute("INSERT INTO members (name, score_adjustment) VALUES (%s, %s)", (name, highest))
         conn.commit()
-        return {"message": f"Member '{name}' added with starting chore rate of {highest_rate:.2f}."}
+        return {"message": f"Member '{name}' added with starting score of {highest:.2f}."}
     except Exception as err:
         return {"error": f"Failed to add member: {err}"}
     finally:
@@ -238,44 +317,27 @@ def get_todays_chore_status():
 
 
 def swap_assignment(assignment_id: int, new_member_id: int):
-    """
-    Swaps an existing chore assignment to a different member.
-    Reverses the chore record for the original member and assigns it to the new one.
-    """
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed."}
     cursor = conn.cursor(dictionary=True)
     try:
-        # Get original assignment
-        cursor.execute(
-            "SELECT * FROM chore_assignments WHERE assignment_id = %s",
-            (assignment_id,)
-        )
+        cursor.execute("SELECT * FROM chore_assignments WHERE assignment_id = %s", (assignment_id,))
         assignment = cursor.fetchone()
         if not assignment:
             return {"error": "Assignment not found."}
-
-        # Get new member name for response
         cursor.execute("SELECT name FROM members WHERE member_id = %s", (new_member_id,))
         new_member = cursor.fetchone()
         if not new_member:
             return {"error": "New member not found."}
-
-        # Get old member name
         cursor.execute("SELECT name FROM members WHERE member_id = %s", (assignment['member_id'],))
         old_member = cursor.fetchone()
-
-        # Update assignment to new member
         cursor.execute(
             "UPDATE chore_assignments SET member_id = %s WHERE assignment_id = %s",
             (new_member_id, assignment_id)
         )
         conn.commit()
-
-        return {
-            "message": f"Reassigned {assignment['chore_type']} from {old_member['name']} to {new_member['name']}."
-        }
+        return {"message": f"Reassigned {assignment['chore_type']} from {old_member['name']} to {new_member['name']}."}
     except Exception as err:
         return {"error": f"Failed to swap assignment: {err}"}
     finally:
@@ -303,11 +365,8 @@ def mark_late_arrival(member_id: int, action: str, swap_assignment_id: int = Non
             if not status or status['fully_staffed']:
                 conn.commit()
                 return {"error": "No open chore slots to fill."}
-            if len(status['cooks']) < 2:
-                chore_type = 'Cooking'
-            elif not status['dish_filled'] and not is_friday:
-                chore_type = 'Washing Dishes'
-            else:
+            chore_type = 'Cooking' if len(status['cooks']) < 2 else 'Washing Dishes'
+            if chore_type == 'Washing Dishes' and is_friday:
                 conn.commit()
                 return {"error": "No open chore slots to fill."}
             cursor.execute(
@@ -366,6 +425,15 @@ def mark_attendance(present_member_ids: list[int], attendance_date_str: str):
 
 
 def assign_chores_for_today():
+    """
+    Assigns chores using strict weekly queue + combined score tiebreaker:
+    - Group A (0 chores this week) always picked before Group B (1+ chores this week)
+    - Within groups, yesterday-blocking applied first
+    - All-time rate used as tiebreaker within Group A
+    - Combined score (70% weekly + 30% all-time) used for Group B
+    - Friday: 2 cooks only, min 2 present
+    - Other days: 2 cooks + 1 dish washer, min 3 present
+    """
     conn = get_db_connection()
     if not conn:
         return None, "Database connection failed."
@@ -374,6 +442,7 @@ def assign_chores_for_today():
     is_friday = (today.weekday() == 4)
     min_required = 2 if is_friday else 3
     chores_to_assign = 2 if is_friday else 3
+
     try:
         cursor.execute("SELECT * FROM chore_assignments WHERE assignment_date = %s", (today,))
         if cursor.fetchone():
@@ -390,14 +459,31 @@ def assign_chores_for_today():
         if len(present_today) < min_required:
             return None, f"Warning: Fewer than {min_required} people are present. Chores cannot be assigned."
 
-        all_members = get_all_members_with_scores()
-        eligible = [m for m in all_members if m['member_id'] in present_today]
+        # Build eligible list with all score data
+        cursor.execute(
+            "SELECT member_id, name, score_adjustment FROM members WHERE is_active = TRUE"
+        )
+        all_active = cursor.fetchall()
+        eligible = []
+        for m in all_active:
+            if m['member_id'] not in present_today:
+                continue
+            eligible.append({
+                'member_id': m['member_id'],
+                'name': m['name'],
+                'alltime_rate': _get_alltime_chore_rate(m['member_id'], conn),
+                'combined_score': _get_combined_score(m['member_id'], conn, m['score_adjustment']),
+                'weekly_chore_count': _get_weekly_chore_count(m['member_id'], conn),
+            })
 
         if len(eligible) < chores_to_assign:
             return None, "Not enough eligible members to assign chores."
 
         did_yesterday = _get_members_who_did_chore_yesterday(conn)
-        selected = _select_weighted_unique(eligible, chores_to_assign, did_yesterday)
+        selected = _select_fair(eligible, chores_to_assign, did_yesterday)
+
+        if len(selected) < chores_to_assign:
+            return None, "Could not select enough members. Please check attendance."
 
         assignments = {}
         assignment_data = []
@@ -447,18 +533,11 @@ def get_daily_assignments(assignment_date: date):
             (assignment_date,)
         )
         for row in cursor.fetchall():
+            entry = {'name': row['name'], 'assignment_id': row['assignment_id'], 'member_id': row['member_id']}
             if row['chore_type'] == 'Cooking':
-                assignments['cooks'].append({
-                    'name': row['name'],
-                    'assignment_id': row['assignment_id'],
-                    'member_id': row['member_id']
-                })
+                assignments['cooks'].append(entry)
             else:
-                assignments['dish_washer'].append({
-                    'name': row['name'],
-                    'assignment_id': row['assignment_id'],
-                    'member_id': row['member_id']
-                })
+                assignments['dish_washer'].append(entry)
         return assignments
     finally:
         cursor.close()
@@ -466,10 +545,6 @@ def get_daily_assignments(assignment_date: date):
 
 
 def get_schedule(days: int = 30):
-    """
-    Returns a schedule of chore assignments for the last N days.
-    Each entry: { date, day_name, cooks: [...], dish_washer: [...] }
-    """
     conn = get_db_connection()
     if not conn:
         return []
@@ -485,8 +560,6 @@ def get_schedule(days: int = 30):
             ORDER BY ca.assignment_date DESC
         """, (start_date, today))
         rows = cursor.fetchall()
-
-        # Group by date
         days_map = {}
         for row in rows:
             d = row['assignment_date'].isoformat()
@@ -501,7 +574,6 @@ def get_schedule(days: int = 30):
                 days_map[d]['cooks'].append(row['name'])
             else:
                 days_map[d]['dish_washer'].append(row['name'])
-
         return list(days_map.values())
     finally:
         cursor.close()
@@ -513,30 +585,45 @@ def get_history_summary():
     if not conn:
         return []
     cursor = conn.cursor(dictionary=True)
+    start_of_week, today = _get_week_bounds()
     try:
-        cursor.execute("SELECT member_id, name FROM members WHERE is_active = TRUE ORDER BY name")
+        cursor.execute("SELECT member_id, name, score_adjustment FROM members WHERE is_active = TRUE ORDER BY name")
         members = cursor.fetchall()
         summary = []
-        today = date.today()
-        start_of_week = today - timedelta(days=today.weekday())
         for member in members:
             mid = member['member_id']
+
             cursor.execute("SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s", (mid,))
             total_chores = cursor.fetchone()['total']
+
             cursor.execute("SELECT COUNT(*) as total FROM attendance WHERE member_id = %s AND is_present = TRUE", (mid,))
             days_present = cursor.fetchone()['total']
-            chore_rate = round(total_chores / days_present, 3) if days_present > 0 else 0.0
+
             cursor.execute(
-                "SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s AND assignment_date >= %s",
-                (mid, start_of_week)
+                "SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s AND assignment_date BETWEEN %s AND %s",
+                (mid, start_of_week, today)
             )
             chores_this_week = cursor.fetchone()['total']
+
+            cursor.execute(
+                "SELECT COUNT(*) as total FROM attendance WHERE member_id = %s AND is_present = TRUE AND attendance_date BETWEEN %s AND %s",
+                (mid, start_of_week, today)
+            )
+            days_present_this_week = cursor.fetchone()['total']
+
+            alltime_rate = round(total_chores / days_present, 3) if days_present > 0 else 0.0
+            weekly_rate = round(chores_this_week / days_present_this_week, 3) if days_present_this_week > 0 else 0.0
+            combined = round(0.7 * weekly_rate + 0.3 * alltime_rate, 3)
+
             summary.append({
                 "name": member['name'],
+                "chores_this_week": chores_this_week,
+                "days_present_this_week": days_present_this_week,
+                "weekly_rate": weekly_rate,
                 "total_chores": total_chores,
                 "days_present": days_present,
-                "chore_rate": chore_rate,
-                "chores_this_week": chores_this_week,
+                "alltime_rate": alltime_rate,
+                "combined_score": combined,
             })
         return summary
     finally:

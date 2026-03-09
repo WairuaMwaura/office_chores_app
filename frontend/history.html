@@ -20,19 +20,24 @@
         <div id="message-container"></div>
         <div class="card">
             <h2>Chore History Summary</h2>
-            <p>Fairness is based on each member's all-time chore rate (chores done ÷ days attended).</p>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Member Name</th>
-                        <th>Chores This Week</th>
-                        <th>Total Chores</th>
-                        <th>Days Present</th>
-                        <th>Chore Rate</th>
-                    </tr>
-                </thead>
-                <tbody id="history-table-body"></tbody>
-            </table>
+            <p>Selection priority uses a combined score: <strong>70% this week's rate</strong> + <strong>30% all-time rate</strong>. Lower score = higher priority.</p>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Member</th>
+                            <th>Chores This Week</th>
+                            <th>Days In This Week</th>
+                            <th>Weekly Rate</th>
+                            <th>Total Chores</th>
+                            <th>Total Days In</th>
+                            <th>All-time Rate</th>
+                            <th>Combined Score ↑</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table-body"></tbody>
+                </table>
+            </div>
         </div>
     </div>
     <script src="/static/js/app.js"></script>
