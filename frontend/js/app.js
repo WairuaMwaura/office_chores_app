@@ -35,6 +35,15 @@ async function initIndexPage() {
     const assignButton = document.getElementById('assign-chores-btn');
     const lateArrivalCard = document.getElementById('late-arrival-card');
 
+    // Set past date picker max to today
+    const picker = document.getElementById('past-date-picker');
+    picker.max = date.today();
+    // Default to yesterday
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    picker.value = yesterday.toISOString().split('T')[0];
+
+    // ── Members checklist ──
     async function loadMembers() {
         try {
             const members = await fetchJSON('/api/members');
@@ -56,6 +65,7 @@ async function initIndexPage() {
         }
     }
 
+    // ── Render today's assignments ──
     function renderAssignments(cooks, dishWasher) {
         const cooksContainer = document.getElementById('cooks-list-container');
         const dishesContainer = document.getElementById('dishes-list-container');
@@ -108,8 +118,7 @@ async function initIndexPage() {
         const currentName = e.target.dataset.name;
         document.getElementById('swap-modal-title').textContent = `Replace ${currentName}`;
         document.getElementById('swap-modal-context').textContent =
-            `Select who should take over this chore from ${currentName}.`;
-
+            `Select who should take over this chore from ${currentName}. ${currentName}'s score will be fully reversed.`;
         const members = await fetchJSON('/api/members');
         const select = document.getElementById('swap-member-select');
         select.innerHTML = '<option value="">— Select replacement —</option>';
@@ -144,13 +153,13 @@ async function initIndexPage() {
             document.getElementById('swap-modal').style.display = 'none';
             activeSwapAssignmentId = null;
             showMessage('success', result.message);
-            await refreshAssignments();
+            await refreshTodayAssignments();
         } catch (err) {
             showMessage('error', err.message || 'Failed to swap assignment.');
         }
     });
 
-    async function refreshAssignments() {
+    async function refreshTodayAssignments() {
         const assignments = await fetchJSON('/api/chores/today');
         renderAssignments(assignments.cooks || [], assignments.dish_washer || []);
         await loadLateArrivalSection();
@@ -266,11 +275,102 @@ async function initIndexPage() {
             if (swapId) payload.swap_assignment_id = swapId;
             const result = await postJSON('/api/attendance/late-arrival', payload);
             showMessage('success', result.message);
-            await refreshAssignments();
+            await refreshTodayAssignments();
         } catch (err) {
             showMessage('error', err.message || 'Failed to process late arrival.');
         }
     }
+
+    // ── Past Day Section ──
+    document.getElementById('load-past-date-btn').addEventListener('click', async () => {
+        const dateStr = picker.value;
+        if (!dateStr) { showMessage('error', 'Please select a date.'); return; }
+
+        const today = new Date().toISOString().split('T')[0];
+        if (dateStr > today) { showMessage('error', 'Cannot select a future date.'); return; }
+
+        const section = document.getElementById('past-day-section');
+        const title = document.getElementById('past-day-title');
+        const choreDisplay = document.getElementById('past-day-chores-display');
+        const form = document.getElementById('past-day-form');
+
+        section.style.display = 'block';
+        title.textContent = `Date: ${new Date(dateStr + 'T00:00:00').toDateString()}`;
+
+        // Check if chores already exist for this date
+        try {
+            const chores = await fetchJSON(`/api/chores/for-date?date_str=${dateStr}`);
+            const hasCooks = chores.cooks && chores.cooks.length > 0;
+            const hasDishes = chores.dish_washer && chores.dish_washer.length > 0;
+
+            if (hasCooks || hasDishes) {
+                // Show existing chores, hide form
+                choreDisplay.style.display = 'block';
+                form.style.display = 'none';
+
+                const cooksContainer = document.getElementById('past-cooks-container');
+                const dishesContainer = document.getElementById('past-dishes-container');
+                cooksContainer.innerHTML = '';
+                dishesContainer.innerHTML = '';
+
+                (chores.cooks || []).forEach(c => {
+                    cooksContainer.appendChild(assignmentItem(c));
+                });
+                (chores.dish_washer || []).forEach(d => {
+                    const nameStr = typeof d === 'object' ? d.name : d;
+                    if (nameStr === 'N/A (Friday)') {
+                        dishesContainer.innerHTML = `<p style="font-size:1.1rem;font-weight:600;">N/A (Friday)</p>`;
+                    } else {
+                        dishesContainer.appendChild(assignmentItem(d));
+                    }
+                });
+
+                showMessage('warning', `Chores are already recorded for this date.`);
+            } else {
+                // No chores — show attendance form
+                choreDisplay.style.display = 'none';
+                form.style.display = 'block';
+
+                // Load attendance for this date
+                const attendance = await fetchJSON(`/api/attendance/for-date?date_str=${dateStr}`);
+                const pastList = document.getElementById('past-attendance-list');
+                pastList.innerHTML = '';
+                attendance.forEach(member => {
+                    const li = document.createElement('li');
+                    li.innerHTML = `
+                        <input type="checkbox" id="past-member-${member.member_id}"
+                            value="${member.member_id}" ${member.is_present ? 'checked' : ''}>
+                        <label for="past-member-${member.member_id}">${member.name}</label>`;
+                    pastList.appendChild(li);
+                });
+
+                // Wire up assign button for this specific date
+                const assignPastBtn = document.getElementById('assign-past-chores-btn');
+                assignPastBtn.onclick = async () => {
+                    const checkedBoxes = document.querySelectorAll('#past-attendance-list input[type="checkbox"]:checked');
+                    const present_ids = Array.from(checkedBoxes).map(cb => parseInt(cb.value));
+
+                    try {
+                        await postJSON('/api/attendance/for-date', { date: dateStr, present_ids });
+                    } catch {
+                        showMessage('error', 'Failed to save attendance.');
+                        return;
+                    }
+
+                    try {
+                        const result = await postJSON('/api/chores/assign-for-date', { date: dateStr });
+                        showMessage('success', result.message);
+                        // Reload to show assigned chores
+                        document.getElementById('load-past-date-btn').click();
+                    } catch (err) {
+                        showMessage('warning', err.message || 'Could not assign chores.');
+                    }
+                };
+            }
+        } catch (err) {
+            showMessage('error', 'Failed to load data for this date.');
+        }
+    });
 
     loadMembers();
     loadTodaysAssignments();
@@ -348,7 +448,6 @@ async function initHistoryPage() {
             tbody.innerHTML = '<tr><td colspan="8">No history data available.</td></tr>';
             return;
         }
-        // Sort by combined score ascending so highest priority is at top
         summary.sort((a, b) => a.combined_score - b.combined_score);
         summary.forEach(item => {
             const row = document.createElement('tr');
@@ -446,7 +545,6 @@ function renderGridView(data) {
         label.className = 'grid-cell grid-label';
         label.textContent = member;
         row.appendChild(label);
-
         data.forEach(day => {
             const cell = document.createElement('div');
             cell.className = 'grid-cell';
@@ -468,6 +566,10 @@ function renderGridView(data) {
 // ─────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────
+const date = {
+    today: () => new Date().toISOString().split('T')[0]
+};
+
 async function fetchJSON(path) {
     const res = await fetch(`${API_URL}${path}`);
     const data = await res.json();

@@ -63,6 +63,13 @@ nav a:hover, nav a.active {
     margin-bottom: 1rem;
     color: var(--primary-color);
 }
+.card h3 {
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--secondary-color);
+    font-size: 1rem;
+    font-weight: 600;
+}
 .checklist {
     list-style-type: none;
     padding: 0;
@@ -127,9 +134,11 @@ button.small-btn {
 .form-group {
     display: flex;
     gap: 1rem;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
+    align-items: center;
 }
-.form-group input {
+.form-group input[type="text"],
+.form-group input[type="date"] {
     flex-grow: 1;
     padding: 0.75rem;
     font-size: 1rem;
@@ -155,6 +164,7 @@ select {
     margin-bottom: 0.75rem;
     color: var(--secondary-color);
     font-weight: 500;
+    margin-top: 0;
 }
 .assignment-item {
     display: flex;
@@ -186,6 +196,25 @@ select {
 #late-arrival-context {
     color: var(--secondary-color);
     margin-bottom: 0.75rem;
+}
+.placeholder-text {
+    font-size: 1.1rem;
+    color: var(--secondary-color);
+}
+.info-text {
+    color: var(--secondary-color);
+    font-style: italic;
+    margin-bottom: 0.75rem;
+}
+#past-day-section {
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+    margin-top: 0.5rem;
+}
+#past-day-title {
+    font-weight: 600;
+    color: var(--primary-color);
+    margin-bottom: 1rem;
 }
 .message {
     padding: 1rem;
@@ -294,8 +323,6 @@ th {
     color: white;
     border-color: var(--primary-color);
 }
-
-/* Grid view */
 .schedule-grid {
     overflow-x: auto;
 }

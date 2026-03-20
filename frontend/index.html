@@ -19,7 +19,7 @@
         </nav>
         <div id="message-container"></div>
 
-        <!-- Attendance Card -->
+        <!-- Today: Attendance -->
         <div class="card">
             <h2>Today's Attendance</h2>
             <p>Select who is present in the office today.</p>
@@ -31,24 +31,24 @@
             </div>
         </div>
 
-        <!-- Assignments Card -->
+        <!-- Today: Assignments -->
         <div class="card">
             <h2>Assigned Chores for Today</h2>
             <div id="assignments-display" class="assignments-display">
                 <div class="assignment-group">
                     <h3>🍳 Cooking</h3>
                     <div id="cooks-list-container"></div>
-                    <p id="cooks-placeholder" style="font-size:1.1rem; color: var(--secondary-color);">Not assigned yet</p>
+                    <p id="cooks-placeholder" class="placeholder-text">Not assigned yet</p>
                 </div>
                 <div class="assignment-group">
                     <h3>💧 Washing Dishes</h3>
                     <div id="dishes-list-container"></div>
-                    <p id="dishes-placeholder" style="font-size:1.1rem; color: var(--secondary-color);">Not assigned yet</p>
+                    <p id="dishes-placeholder" class="placeholder-text">Not assigned yet</p>
                 </div>
             </div>
         </div>
 
-        <!-- Late Arrival Card -->
+        <!-- Late Arrival -->
         <div class="card" id="late-arrival-card" style="display:none;">
             <h2>Mark Late Arrival</h2>
             <p>Someone arrived after chores were assigned? Record them here.</p>
@@ -61,6 +61,42 @@
             <div id="late-arrival-options" style="display:none;">
                 <p id="late-arrival-context"></p>
                 <div id="late-arrival-actions" class="late-actions"></div>
+            </div>
+        </div>
+
+        <!-- Past Day Entry -->
+        <div class="card">
+            <h2>Record a Past Day</h2>
+            <p>Missed recording a day? Select a past date to record attendance and assign chores. Only dates with no chore data are available.</p>
+            <div class="form-group">
+                <input type="date" id="past-date-picker" max="">
+                <button id="load-past-date-btn">Load Date</button>
+            </div>
+
+            <div id="past-day-section" style="display:none;">
+                <h3 id="past-day-title"></h3>
+
+                <div id="past-day-chores-display" style="display:none;">
+                    <p class="info-text">Chores already assigned for this day:</p>
+                    <div class="assignments-display">
+                        <div class="assignment-group">
+                            <h3>🍳 Cooking</h3>
+                            <div id="past-cooks-container"></div>
+                        </div>
+                        <div class="assignment-group">
+                            <h3>💧 Washing Dishes</h3>
+                            <div id="past-dishes-container"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="past-day-form" style="display:none;">
+                    <p><strong>Mark attendance for this day:</strong></p>
+                    <ul id="past-attendance-list" class="checklist"></ul>
+                    <div class="button-container">
+                        <button id="assign-past-chores-btn">Save Attendance & Assign Chores</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

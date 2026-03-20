@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -18,6 +18,11 @@ class AttendancePayload(BaseModel):
     present_ids: list[int]
 
 
+class AttendanceForDatePayload(BaseModel):
+    date: str
+    present_ids: list[int]
+
+
 class LateArrivalPayload(BaseModel):
     member_id: int
     action: str
@@ -29,7 +34,11 @@ class SwapAssignmentPayload(BaseModel):
     new_member_id: int
 
 
-# --- HTML Page Routes ---
+class AssignForDatePayload(BaseModel):
+    date: str
+
+
+# --- HTML Routes ---
 @app.get("/")
 async def serve_index():
     return FileResponse(os.path.join(static_files_path, 'index.html'))
@@ -47,7 +56,7 @@ async def serve_schedule_page():
     return FileResponse(os.path.join(static_files_path, 'schedule.html'))
 
 
-# --- API Endpoints ---
+# --- Setup ---
 @app.get("/setup")
 async def setup_db_endpoint():
     try:
@@ -56,6 +65,8 @@ async def setup_db_endpoint():
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
+
+# --- Members ---
 @app.get("/api/members")
 async def get_members_api():
     return JSONResponse(content=logic.get_active_members())
@@ -74,6 +85,8 @@ async def remove_member_api(member_id: int = Form(...)):
         return JSONResponse(content=result, status_code=400)
     return JSONResponse(content=result)
 
+
+# --- Attendance (today) ---
 @app.post("/api/attendance")
 async def mark_attendance_api(payload: AttendancePayload):
     result = logic.mark_attendance(payload.present_ids, date.today().isoformat())
@@ -81,6 +94,50 @@ async def mark_attendance_api(payload: AttendancePayload):
         return JSONResponse(content=result, status_code=400)
     return JSONResponse(content=result)
 
+@app.get("/api/attendance/absent-today")
+async def get_absent_today_api():
+    return JSONResponse(content=logic.get_absent_members_today())
+
+@app.post("/api/attendance/late-arrival")
+async def mark_late_arrival_api(payload: LateArrivalPayload):
+    result = logic.mark_late_arrival(
+        member_id=payload.member_id,
+        action=payload.action,
+        swap_assignment_id=payload.swap_assignment_id
+    )
+    if "error" in result:
+        return JSONResponse(content=result, status_code=400)
+    return JSONResponse(content=result)
+
+
+# --- Attendance (past date) ---
+@app.get("/api/attendance/for-date")
+async def get_attendance_for_date_api(date_str: str):
+    """Returns members with their attendance status for a given past date."""
+    try:
+        target = date.fromisoformat(date_str)
+    except ValueError:
+        return JSONResponse(content={"error": "Invalid date format."}, status_code=400)
+    if target > date.today():
+        return JSONResponse(content={"error": "Cannot access future dates."}, status_code=400)
+    return JSONResponse(content=logic.get_attendance_for_date(target))
+
+@app.post("/api/attendance/for-date")
+async def mark_attendance_for_date_api(payload: AttendanceForDatePayload):
+    """Records attendance for a specific past date."""
+    try:
+        target = date.fromisoformat(payload.date)
+    except ValueError:
+        return JSONResponse(content={"error": "Invalid date format."}, status_code=400)
+    if target > date.today():
+        return JSONResponse(content={"error": "Cannot record attendance for future dates."}, status_code=400)
+    result = logic.mark_attendance(payload.present_ids, payload.date)
+    if "error" in result:
+        return JSONResponse(content=result, status_code=400)
+    return JSONResponse(content=result)
+
+
+# --- Chores (today) ---
 @app.post("/api/chores/assign")
 async def assign_chores_api():
     assignments, message = logic.assign_chores_for_today()
@@ -101,27 +158,38 @@ async def get_chore_status_api():
 
 @app.post("/api/chores/swap")
 async def swap_assignment_api(payload: SwapAssignmentPayload):
-    """Swap an assigned person with someone else."""
     result = logic.swap_assignment(payload.assignment_id, payload.new_member_id)
     if "error" in result:
         return JSONResponse(content=result, status_code=400)
     return JSONResponse(content=result)
 
-@app.get("/api/attendance/absent-today")
-async def get_absent_today_api():
-    return JSONResponse(content=logic.get_absent_members_today())
 
-@app.post("/api/attendance/late-arrival")
-async def mark_late_arrival_api(payload: LateArrivalPayload):
-    result = logic.mark_late_arrival(
-        member_id=payload.member_id,
-        action=payload.action,
-        swap_assignment_id=payload.swap_assignment_id
-    )
-    if "error" in result:
-        return JSONResponse(content=result, status_code=400)
-    return JSONResponse(content=result)
+# --- Chores (past date) ---
+@app.post("/api/chores/assign-for-date")
+async def assign_chores_for_date_api(payload: AssignForDatePayload):
+    """Assigns chores for a past date that has no chore data yet."""
+    try:
+        target = date.fromisoformat(payload.date)
+    except ValueError:
+        return JSONResponse(content={"error": "Invalid date format."}, status_code=400)
+    if target > date.today():
+        return JSONResponse(content={"error": "Cannot assign chores for future dates."}, status_code=400)
+    assignments, message = logic.assign_chores_for_date(target)
+    if not assignments:
+        return JSONResponse(content={"message": message}, status_code=400)
+    return JSONResponse(content={"assignments": assignments, "message": message})
 
+@app.get("/api/chores/for-date")
+async def get_chores_for_date_api(date_str: str):
+    """Returns chore assignments for a specific date."""
+    try:
+        target = date.fromisoformat(date_str)
+    except ValueError:
+        return JSONResponse(content={"error": "Invalid date format."}, status_code=400)
+    return JSONResponse(content=logic.get_daily_assignments(target))
+
+
+# --- History & Schedule ---
 @app.get("/api/history/summary")
 async def get_history_summary_api():
     return JSONResponse(content=logic.get_history_summary())
