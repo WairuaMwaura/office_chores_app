@@ -165,7 +165,6 @@ def _select_fair(eligible: list, k: int, did_yesterday: set) -> list:
 
 
 def _build_eligible(present_ids: set, conn) -> list:
-    """Builds eligible member list with all scoring data for present members."""
     cursor = conn.cursor(dictionary=True)
     try:
         cursor.execute(
@@ -266,7 +265,6 @@ def get_todays_chore_status():
 
 
 def get_chore_status_for_date(target_date: date):
-    """Returns chore assignment status for any given date."""
     conn = get_db_connection()
     if not conn:
         return None
@@ -282,7 +280,7 @@ def get_chore_status_for_date(target_date: date):
         assignments = cursor.fetchall()
         cooks = [a for a in assignments if a['chore_type'] == 'Cooking']
         dish_washers = [a for a in assignments if a['chore_type'] == 'Washing Dishes']
-        cooks_filled = len(cooks) >= 2
+        cooks_filled = len(cooks) >= 3
         dish_filled = len(dish_washers) >= 1 or is_friday
         return {
             "chores_assigned": len(assignments) > 0,
@@ -299,11 +297,6 @@ def get_chore_status_for_date(target_date: date):
 
 
 def swap_assignment(assignment_id: int, new_member_id: int):
-    """
-    Swaps a chore assignment to a new member.
-    Deletes the old assignment (reversing original member's score)
-    and creates a new one for the replacement.
-    """
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed."}
@@ -313,19 +306,15 @@ def swap_assignment(assignment_id: int, new_member_id: int):
         assignment = cursor.fetchone()
         if not assignment:
             return {"error": "Assignment not found."}
-
         cursor.execute("SELECT name FROM members WHERE member_id = %s", (new_member_id,))
         new_member = cursor.fetchone()
         if not new_member:
             return {"error": "New member not found."}
-
         cursor.execute("SELECT name FROM members WHERE member_id = %s", (assignment['member_id'],))
         old_member = cursor.fetchone()
-
-        # Delete old assignment so original member's score is fully reversed
+        # Delete old record (reverses original member's score)
         cursor.execute("DELETE FROM chore_assignments WHERE assignment_id = %s", (assignment_id,))
-
-        # Create new assignment for replacement member
+        # Insert new record for replacement
         cursor.execute(
             "INSERT INTO chore_assignments (member_id, chore_type, assignment_date) VALUES (%s, %s, %s)",
             (new_member_id, assignment['chore_type'], assignment['assignment_date'])
@@ -361,8 +350,11 @@ def mark_late_arrival(member_id: int, action: str, swap_assignment_id: int = Non
             if not status or status['fully_staffed']:
                 conn.commit()
                 return {"error": "No open chore slots to fill."}
-            chore_type = 'Cooking' if len(status['cooks']) < 2 else 'Washing Dishes'
-            if chore_type == 'Washing Dishes' and is_friday:
+            if len(status['cooks']) < 3:
+                chore_type = 'Cooking'
+            elif not status['dish_filled'] and not is_friday:
+                chore_type = 'Washing Dishes'
+            else:
                 conn.commit()
                 return {"error": "No open chore slots to fill."}
             cursor.execute(
@@ -426,27 +418,29 @@ def assign_chores_for_today():
 
 def assign_chores_for_date(target_date: date):
     """
-    Assigns chores for a given date using strict weekly queue + combined score tiebreaker.
-    For past dates: uses attendance already recorded for that date.
-    Only works if no chores are already assigned for that date.
+    Assigns chores for a given date:
+    - Non-Friday: 3 cooks + 1 dish washer (min 4 present)
+    - Friday:     3 cooks only             (min 3 present)
     """
     conn = get_db_connection()
     if not conn:
         return None, "Database connection failed."
     cursor = conn.cursor(dictionary=True)
     is_friday = (target_date.weekday() == 4)
-    min_required = 2 if is_friday else 3
-    chores_to_assign = 2 if is_friday else 3
+
+    # Updated slot counts: 3 cooks always, + 1 dish washer on non-Fridays
+    num_cooks = 3
+    num_dish = 0 if is_friday else 1
+    chores_to_assign = num_cooks + num_dish
+    min_required = chores_to_assign  # need exactly enough people to fill all slots
 
     try:
-        # Check if chores already assigned
         cursor.execute(
             "SELECT * FROM chore_assignments WHERE assignment_date = %s", (target_date,)
         )
         if cursor.fetchone():
             return None, f"Chores have already been assigned for {target_date}."
 
-        # Get members present on that date
         cursor.execute(
             "SELECT m.member_id, m.name FROM members m "
             "JOIN attendance a ON m.member_id = a.member_id "
@@ -456,17 +450,16 @@ def assign_chores_for_date(target_date: date):
         present = {p['member_id']: p['name'] for p in cursor.fetchall()}
 
         if len(present) < min_required:
-            return None, f"Fewer than {min_required} people were present on {target_date}. Chores cannot be assigned."
+            day_type = "Friday" if is_friday else "non-Friday"
+            return None, f"Warning: Fewer than {min_required} people present ({day_type} requires {chores_to_assign} slots). Chores cannot be assigned."
 
         eligible = _build_eligible(set(present.keys()), conn)
 
         if len(eligible) < chores_to_assign:
             return None, "Not enough eligible members to assign chores."
 
-        # For past dates, use the day before target as "yesterday"
         yesterday = target_date - timedelta(days=1)
         did_day_before = _get_members_who_did_chore_on(yesterday, conn)
-
         selected = _select_fair(eligible, chores_to_assign, did_day_before)
 
         if len(selected) < chores_to_assign:
@@ -475,15 +468,13 @@ def assign_chores_for_date(target_date: date):
         assignments = {}
         assignment_data = []
 
-        cook1, cook2 = selected[0], selected[1]
-        assignments['cooks'] = [cook1['name'], cook2['name']]
-        assignment_data.extend([
-            (cook1['member_id'], 'Cooking', target_date),
-            (cook2['member_id'], 'Cooking', target_date),
-        ])
+        cooks = selected[:num_cooks]
+        assignments['cooks'] = [c['name'] for c in cooks]
+        for cook in cooks:
+            assignment_data.append((cook['member_id'], 'Cooking', target_date))
 
-        if not is_friday:
-            dish_washer = selected[2]
+        if num_dish > 0:
+            dish_washer = selected[num_cooks]
             assignments['dish_washer'] = [dish_washer['name']]
             assignment_data.append((dish_washer['member_id'], 'Washing Dishes', target_date))
         else:
@@ -506,7 +497,6 @@ def assign_chores_for_date(target_date: date):
 
 
 def get_attendance_for_date(target_date: date):
-    """Returns all active members with their attendance status for a given date."""
     conn = get_db_connection()
     if not conn:
         return []
@@ -607,31 +597,23 @@ def get_history_summary():
         summary = []
         for member in members:
             mid = member['member_id']
-
-            cursor.execute(
-                "SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s", (mid,))
+            cursor.execute("SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s", (mid,))
             total_chores = cursor.fetchone()['total']
-
-            cursor.execute(
-                "SELECT COUNT(*) as total FROM attendance WHERE member_id = %s AND is_present = TRUE", (mid,))
+            cursor.execute("SELECT COUNT(*) as total FROM attendance WHERE member_id = %s AND is_present = TRUE", (mid,))
             days_present = cursor.fetchone()['total']
-
             cursor.execute(
                 "SELECT COUNT(*) as total FROM chore_assignments WHERE member_id = %s AND assignment_date BETWEEN %s AND %s",
                 (mid, start_of_week, today)
             )
             chores_this_week = cursor.fetchone()['total']
-
             cursor.execute(
                 "SELECT COUNT(*) as total FROM attendance WHERE member_id = %s AND is_present = TRUE AND attendance_date BETWEEN %s AND %s",
                 (mid, start_of_week, today)
             )
             days_present_this_week = cursor.fetchone()['total']
-
             alltime_rate = round(total_chores / days_present, 3) if days_present > 0 else 0.0
             weekly_rate = round(chores_this_week / days_present_this_week, 3) if days_present_this_week > 0 else 0.0
             combined = round(0.7 * weekly_rate + 0.3 * alltime_rate, 3)
-
             summary.append({
                 "name": member['name'],
                 "chores_this_week": chores_this_week,
